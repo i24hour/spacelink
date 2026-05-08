@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(cuid())
+  email             String   @unique
+  telegramId        String?  @map("telegram_id")
+  whatsappNumber    String?  @map("whatsapp_number")
+  preferredChannels String[] @default(["email"]) @map("preferred_channels")
+  timezone          String   @default("UTC")
+  plan              String   @default("free")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  savedLinks SavedLink[]
+
+  @@map("users")
+}
+
+model SavedLink {
+  id                         String    @id @default(cuid())
+  userId                     String    @map("user_id")
+  url                        String
+  title                      String
+  rawContent                 String?   @map("raw_content")
+  extractedDeadline          DateTime? @map("extracted_deadline")
+  timezone                   String?
+  category                   String?
+  urgencyScore               Int?      @map("urgency_score")
+  confidenceScore            Float?    @map("confidence_score")
+  status                     String    @default("active")
+  rollingApplication         Boolean   @default(false) @map("rolling_application")
+  estimatedCompletionMinutes Int?      @map("estimated_completion_minutes")
+  metadata                   Json?     @default("{}")
+  createdAt                  DateTime  @default(now()) @map("created_at")
+  updatedAt                  DateTime  @updatedAt @map("updated_at")
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reminders Reminder[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([extractedDeadline])
+  @@map("saved_links")
+}
+
+model Reminder {
+  id           String   @id @default(cuid())
+  savedLinkId  String   @map("saved_link_id")
+  reminderTime DateTime @map("reminder_time")
+  reminderType String   @map("reminder_type")
+  channel      String
+  sentStatus   String   @default("pending") @map("sent_status")
+  aiMessage    String?  @map("ai_message")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  savedLink        SavedLink          @relation(fields: [savedLinkId], references: [id], onDelete: Cascade)
+  notificationLogs NotificationLog[]
+
+  @@index([savedLinkId])
+  @@index([sentStatus])
+  @@index([reminderTime])
+  @@map("reminders")
+}
+
+model NotificationLog {
+  id             String   @id @default(cuid())
+  reminderId     String   @map("reminder_id")
+  deliveryStatus String   @map("delivery_status")
+  responseData   Json?    @map("response_data")
+  sentAt         DateTime @default(now()) @map("sent_at")
+
+  reminder Reminder @relation(fields: [reminderId], references: [id], onDelete: Cascade)
+
+  @@index([reminderId])
+  @@map("notification_logs")
+}

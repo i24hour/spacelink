@@ -1,0 +1,50 @@
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+
+import authRouter from "./routes/auth";
+import linksRouter from "./routes/links";
+import remindersRouter from "./routes/reminders";
+import usersRouter from "./routes/users";
+import webhooksRouter from "./routes/webhooks";
+import notificationsRouter from "./routes/notifications";
+import telegramWebhookRouter from "./routes/telegram-webhook";
+
+import { linkProcessorWorker } from "./queues/processor";
+import { reminderDispatchWorker } from "./queues/dispatcher";
+import { startCron } from "./cron/reminders";
+
+const app = express();
+const PORT = process.env.PORT || 4000;
+
+app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000", credentials: true }));
+app.use(express.json());
+app.use(cookieParser());
+
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+app.use("/api/auth", authRouter);
+app.use("/api/webhooks", webhooksRouter);
+app.use("/api/webhooks/telegram", telegramWebhookRouter);
+app.use("/api/links", linksRouter);
+app.use("/api/reminders", remindersRouter);
+app.use("/api/users", usersRouter);
+app.use("/api/notifications", notificationsRouter);
+
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error(err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
+app.listen(PORT, () => {
+  console.log(`DeadlineAI API running on http://localhost:${PORT}`);
+  startCron();
+});
+
+// Keep workers alive
+process.on("SIGTERM", async () => {
+  await linkProcessorWorker.close();
+  await reminderDispatchWorker.close();
+  process.exit(0);
+});

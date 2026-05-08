@@ -1,0 +1,31 @@
+{
+  "name": "@deadlineai/extension",
+  "displayName": "DeadlineAI",
+  "version": "0.0.1",
+  "description": "Save deadlines from any webpage.",
+  "scripts": {
+    "dev": "plasmo dev",
+    "build": "plasmo build"
+  },
+  "dependencies": {
+    "plasmo": "0.89.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.4.5"
+  },
+  "manifest": {
+    "host_permissions": ["https://*/*", "http://*/*"],
+    "permissions": ["activeTab", "storage", "scripting", "tabs"],
+    "web_accessible_resources": [
+      {
+        "resources": ["assets/*"],
+        "matches": ["<all_urls>"]
+      }
+    ]
+  }
+}
