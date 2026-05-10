@@ -1,6 +1,14 @@
-import { Resend } from "resend";
+import { createTransport } from "nodemailer";
 
-const resend = new Resend(process.env.RESEND_API_KEY || "");
+const transporter = createTransport({
+  host: process.env.SMTP_HOST || "smtp.gmail.com",
+  port: Number(process.env.SMTP_PORT || 587),
+  secure: false,
+  auth: {
+    user: process.env.SMTP_USER || "",
+    pass: process.env.SMTP_PASS || "",
+  },
+});
 
 export function buildEmailTemplate(subject: string, bodyText: string) {
   return `<!DOCTYPE html>
@@ -57,19 +65,19 @@ export function buildEmailTemplate(subject: string, bodyText: string) {
 }
 
 export async function sendEmail(to: string, subject: string, bodyText: string) {
-  if (!process.env.RESEND_API_KEY) {
-    console.warn("Resend API key missing");
-    return { delivered: false, error: "No API key" };
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.warn("SMTP credentials missing");
+    return { delivered: false, error: "No SMTP credentials" };
   }
   try {
-    const data = await resend.emails.send({
+    const info = await transporter.sendMail({
       from: process.env.EMAIL_FROM || "DeadlineAI <reminders@deadlineai.dev>",
       to,
       subject,
       html: buildEmailTemplate(subject, bodyText),
       text: bodyText,
     });
-    return { delivered: true, data };
+    return { delivered: true, data: { messageId: info.messageId } };
   } catch (err: any) {
     return { delivered: false, error: err?.message || String(err) };
   }

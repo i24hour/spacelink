@@ -652,7 +652,7 @@ spacelink/
 - `PORT` - API server port
 - `LITELLM_PROXY_URL` / `LITELLM_API_KEY` / `LITELLM_MODEL` - AI provider
 - `FIRECRAWL_API_KEY` - Page scraping
-- `RESEND_API_KEY` / `EMAIL_FROM` - Email delivery
+- `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `EMAIL_FROM` - Google SMTP email delivery
 - `TELEGRAM_BOT_TOKEN` / `TELEGRAM_BOT_NAME` / `TELEGRAM_WEBHOOK_URL` - Telegram
 - `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_ACCESS_TOKEN` - WhatsApp (paused)
 - `CRON_INTERVAL_MS` - Cron sweep frequency

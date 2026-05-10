@@ -187,12 +187,17 @@ Users can use these commands in Telegram anytime:
 
 ---
 
-## Email Setup (Resend)
+## Email Setup (Google SMTP)
 
-1. Create account at [resend.com](https://resend.com)
-2. Get an **API Key** → `RESEND_API_KEY`
-3. Verify your domain (e.g. `deadlineai.dev`)
-4. Set `EMAIL_FROM` (e.g. `DeadlineAI <reminders@deadlineai.dev>`)
+1. Use any Gmail / Google Workspace account
+2. Generate an **App Password** at https://myaccount.google.com/apppasswords
+   - Requires 2FA enabled on the Google account
+   - Select "Mail" + "Other (Custom name)" → name it "DeadlineAI"
+3. Copy the 16-character password → `SMTP_PASS`
+4. Set `SMTP_USER` to your Gmail address
+5. Set `EMAIL_FROM` (e.g. `DeadlineAI <your-email@gmail.com>`)
+
+No additional user setup needed — emails go to the user's registered email address automatically.
 
 **Test before go-live:**
 - Click **Send test email** in Settings
