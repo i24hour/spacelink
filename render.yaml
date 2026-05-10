@@ -18,11 +18,11 @@ services:
       - key: UPSTASH_REDIS_URL
         sync: false
       - key: JWT_SECRET
-        generateValue: true
+        sync: false
       - key: GOOGLE_CLIENT_IDS
         sync: false
       - key: FRONTEND_URL
-        sync: false
+        value: "https://web-i24hours-projects.vercel.app"
       - key: LITELLM_PROXY_URL
         sync: false
       - key: LITELLM_API_KEY
@@ -43,7 +43,3 @@ services:
         sync: false
       - key: CRON_INTERVAL_MS
         value: "60000"
-      - key: CLERK_SECRET_KEY
-        sync: false
-      - key: CLERK_WEBHOOK_SECRET
-        sync: false
