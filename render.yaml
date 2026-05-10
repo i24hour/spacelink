@@ -1,0 +1,49 @@
+services:
+  - type: web
+    name: deadlineai-api
+    runtime: node
+    region: ohio
+    plan: starter
+    branch: main
+    rootDir: apps/api
+    buildCommand: cd ../../packages/db && npx prisma generate && cd ../../apps/api && npm install && npx tsc
+    startCommand: cd apps/api && node dist/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "4000"
+      - key: DATABASE_URL
+        sync: false
+      - key: UPSTASH_REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GOOGLE_CLIENT_IDS
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: LITELLM_PROXY_URL
+        sync: false
+      - key: LITELLM_API_KEY
+        sync: false
+      - key: LITELLM_MODEL
+        value: "gpt-4o-mini"
+      - key: FIRECRAWL_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        value: "DeadlineAI <reminders@deadlineai.dev>"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_NAME
+        sync: false
+      - key: TELEGRAM_WEBHOOK_URL
+        sync: false
+      - key: CRON_INTERVAL_MS
+        value: "60000"
+      - key: CLERK_SECRET_KEY
+        sync: false
+      - key: CLERK_WEBHOOK_SECRET
+        sync: false
