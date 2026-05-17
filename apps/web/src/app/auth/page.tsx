@@ -25,6 +25,14 @@ export default function AuthPage() {
     const idToken = params.get("id_token");
     const pendingTgLink = sessionStorage.getItem("deadlineai_tg_link");
 
+    if (!idToken && pendingTgLink) {
+      const existingToken = localStorage.getItem("deadlineai_token");
+      if (existingToken) {
+        connectTelegramWithExistingSession(existingToken, pendingTgLink);
+        return;
+      }
+    }
+
     if (idToken) {
       // We're in a popup after OAuth redirect. Send token to parent (extension).
       if (window.opener && !pendingTgLink) {
@@ -44,6 +52,24 @@ export default function AuthPage() {
       window.close();
     }
   }, []);
+
+  async function connectTelegramWithExistingSession(token: string, telegramLinkToken: string) {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    try {
+      await fetch(`${apiUrl}/api/auth/telegram-connect`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ token: telegramLinkToken }),
+      });
+      sessionStorage.removeItem("deadlineai_tg_link");
+      window.location.href = "/dashboard";
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   async function exchangeToken(idToken: string, telegramLinkToken?: string) {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
