@@ -7,8 +7,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@deadlineai/db": "workspace:*",
-    "@deadlineai/shared": "workspace:*",
+    "@clerk/clerk-sdk-node": "^5.0.0",
+    "@deadlineai/db": "file:../../packages/db",
+    "@deadlineai/shared": "file:../../packages/shared",
     "bullmq": "^5.7.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",

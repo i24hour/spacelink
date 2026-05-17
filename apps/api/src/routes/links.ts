@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Prisma } from "@deadlineai/db";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { universalAuth, AuthRequest } from "../lib/universal-auth";
@@ -40,7 +41,7 @@ router.post("/", universalAuth, async (req: AuthRequest, res: any) => {
         url: parsed.url,
         title: parsed.title,
         rawContent: parsed.rawContent || "",
-        metadata: parsed.metadata || {},
+        metadata: (parsed.metadata || {}) as Prisma.InputJsonValue,
         extractedDeadline: parsed.manualDeadline ? new Date(parsed.manualDeadline) : null,
         status: "pending",
       },
@@ -92,6 +93,7 @@ router.patch("/:id", universalAuth, async (req: AuthRequest, res: any) => {
 
     const link = await prisma.savedLink.findFirst({
       where: { id, userId },
+    });
     if (!link) return res.status(404).json({ error: "Not found" });
 
     const updated = await prisma.savedLink.update({
@@ -120,6 +122,7 @@ router.delete("/:id", universalAuth, async (req: AuthRequest, res: any) => {
     const { id } = req.params;
     const link = await prisma.savedLink.findFirst({
       where: { id, userId },
+    });
     if (!link) return res.status(404).json({ error: "Not found" });
     await prisma.savedLink.delete({ where: { id } });
     return res.json({ ok: true });

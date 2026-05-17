@@ -15,7 +15,10 @@ export async function sendTelegramRaw(chatId: string, text: string, parseMode?: 
         parse_mode: parseMode || undefined,
       }),
     });
-    const data = await res.json();
+    const data = (await res.json()) as {
+      ok?: boolean;
+      description?: string;
+    };
     if (!data.ok && parseMode) {
       // Retry without parse_mode in case markdown caused issues
       return sendTelegramRaw(chatId, text);
