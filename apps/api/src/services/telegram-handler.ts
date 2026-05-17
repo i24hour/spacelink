@@ -1,11 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { sendTelegramRaw } from "../services/notifications/telegram";
 import { processExtractionFromUrl } from "./extraction-url";
-
-// Detect if text is a URL (with or without protocol)
-function isUrl(text: string): boolean {
-  return /^(https?:\/\/)?([\w-]+\.)+[\w-]+(\/\S*)?$/i.test(text.trim());
-}
+import { runTelegramAssistant } from "./telegram-assistant";
 
 // Detect if text contains a URL (with or without protocol)
 function extractUrl(text: string): string | null {
@@ -24,16 +20,26 @@ function extractUrl(text: string): string | null {
 
 function formatRelativeDeadline(deadline: Date): string {
   const diffMs = deadline.getTime() - Date.now();
-  const absMs = Math.abs(diffMs);
-  const absHours = absMs / (1000 * 60 * 60);
+  const isPast = diffMs < 0;
+  const totalSeconds = Math.max(0, Math.floor(Math.abs(diffMs) / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const suffix = isPast ? "ago" : "left";
+  return `${days}d ${hours}h ${minutes}m ${seconds}s ${suffix} (total ${totalMinutes}m ${seconds}s)`;
+}
 
-  if (absHours < 48) {
-    const hours = Math.max(0.1, Math.round(absHours * 10) / 10);
-    return diffMs >= 0 ? `${hours}h left` : `${hours}h ago`;
-  }
-
-  const days = Math.ceil(absMs / (1000 * 60 * 60 * 24));
-  return diffMs >= 0 ? `${days}d left` : `${days}d ago`;
+function formatPreciseTimeLeft(deadline: Date) {
+  const diffMs = deadline.getTime() - Date.now();
+  const totalSeconds = Math.max(0, Math.floor(diffMs / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  return { days, hours, minutes, seconds, totalMinutes };
 }
 
 function formatDeadlineInTimezone(date: Date, timezone: string): string {
@@ -154,7 +160,9 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     }
 
     const lines = links.map((l, i) => {
-      const date = l.extractedDeadline ? new Date(l.extractedDeadline).toLocaleDateString() : "TBD";
+      const date = l.extractedDeadline
+        ? formatDeadlineInTimezone(new Date(l.extractedDeadline), user.timezone)
+        : "TBD";
       const timeLeft = l.extractedDeadline ? formatRelativeDeadline(new Date(l.extractedDeadline)) : "";
       return `${i + 1}. <b>${l.title}</b>\n   📅 ${date}${timeLeft ? ` · ${timeLeft}` : ""}${l.category ? ` · ${l.category}` : ""}${l.urgencyScore && l.urgencyScore >= 7 ? " 🔥" : ""}`;
     });
@@ -200,11 +208,11 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     }
 
     const deadline = new Date(next.extractedDeadline);
-    const diffHours = Math.max(0, Math.round(((deadline.getTime() - Date.now()) / (1000 * 60 * 60)) * 10) / 10);
+    const left = formatPreciseTimeLeft(deadline);
 
     await sendTelegramRaw(
       chatId,
-      `⏳ <b>Time left</b>\n\n<b>${next.title}</b>\n~<b>${diffHours} hours</b> left\nDeadline: ${formatDeadlineInTimezone(deadline, linkedUser.timezone)}`,
+      `⏳ <b>Time left</b>\n\n<b>${next.title}</b>\n<b>${left.days}d ${left.hours}h ${left.minutes}m ${left.seconds}s left</b>\n(total ${left.totalMinutes}m ${left.seconds}s)\nDeadline: ${formatDeadlineInTimezone(deadline, linkedUser.timezone)}`,
       "HTML"
     );
     return;
@@ -229,7 +237,9 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       where: { userId: user.id, url },
     });
     if (existing) {
-      const date = existing.extractedDeadline ? new Date(existing.extractedDeadline).toLocaleDateString() : "TBD";
+      const date = existing.extractedDeadline
+        ? formatDeadlineInTimezone(new Date(existing.extractedDeadline), user.timezone)
+        : "TBD";
       const left = existing.extractedDeadline ? formatRelativeDeadline(new Date(existing.extractedDeadline)) : "";
       await sendTelegramRaw(
         chatId,
@@ -248,7 +258,9 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         return;
       }
 
-      const date = result.extractedDeadline ? new Date(result.extractedDeadline).toLocaleDateString() : "TBD";
+      const date = result.extractedDeadline
+        ? formatDeadlineInTimezone(new Date(result.extractedDeadline), user.timezone)
+        : "TBD";
       const left = result.extractedDeadline ? formatRelativeDeadline(new Date(result.extractedDeadline)) : "";
 
       await sendTelegramRaw(
@@ -265,12 +277,15 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
   // Unknown message
   if (linkedUser) {
-    await sendTelegramRaw(
-      chatId,
-      "✅ You're connected.\n\n👉 Paste a link (like istocks.codes) and I'll track the deadline\n👉 Use /deadlines to see your deadlines\n👉 Use /status to verify connection",
-      "HTML"
-    );
-    return;
+    try {
+      const llmReply = await runTelegramAssistant(linkedUser, raw);
+      if (llmReply) {
+        await sendTelegramRaw(chatId, llmReply, "HTML");
+        return;
+      }
+    } catch (e) {
+      console.error("Telegram assistant error:", e);
+    }
   }
 
   await sendTelegramRaw(
