@@ -20,7 +20,7 @@ model User {
 
   savedLinks SavedLink[]
 
-  @@map("users")
+  @@map("app_users")
 }
 
 model SavedLink {
