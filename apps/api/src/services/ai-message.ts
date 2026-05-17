@@ -1,4 +1,4 @@
-import { SavedLink, User } from "@prisma/client";
+import type { SavedLink, User } from "@deadlineai/db";
 import { litellm } from "../lib/llm";
 
 export async function generateReminderMessage(

@@ -1,4 +1,4 @@
-import { SavedLink } from "@prisma/client";
+import type { SavedLink } from "@deadlineai/db";
 import { prisma } from "../lib/prisma";
 import { reminderDispatchQueue } from "../queues/dispatcher";
 

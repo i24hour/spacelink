@@ -20,7 +20,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd.startsWith("/start")) {
     const token = cmd.split(" ")[1];
     if (token) {
-      const { consumeTelegramLinkToken } = await import("../lib/auth");
+      const { consumeTelegramLinkToken } = await import("../lib/auth.js");
       const userId = consumeTelegramLinkToken(token);
       if (userId) {
         await prisma.user.update({

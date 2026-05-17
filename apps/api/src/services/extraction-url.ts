@@ -2,7 +2,7 @@ import { prisma } from "../lib/prisma";
 import { scrapeUrl } from "../lib/firecrawl";
 import { extractWithLLM } from "../lib/llm";
 import { scheduleSmartRemindersForLink } from "./reminders-smart";
-import { SavedLink } from "@prisma/client";
+import type { SavedLink } from "@deadlineai/db";
 
 function buildPrompt(title: string, content: string) {
   return `
