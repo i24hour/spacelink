@@ -1,11 +1,11 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
-const isProtected = createRouteMatcher(["/dashboard(.*)", "/settings(.*)"]);
-
-export default clerkMiddleware((auth, req) => {
-  if (isProtected(req)) auth().protect();
-});
+export default function middleware(_req: NextRequest) {
+  // All pages are public. Auth is handled client-side via Google Sign-In + JWT.
+  return NextResponse.next();
+}
 
 export const config = {
-  matcher: ["/((?!.*\\..*|_next).*)", "/", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
