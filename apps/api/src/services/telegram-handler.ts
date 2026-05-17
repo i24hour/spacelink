@@ -24,6 +24,7 @@ function extractUrl(text: string): string | null {
 
 export async function handleTelegramMessage(chatId: string, text: string) {
   const cmd = text.trim().toLowerCase();
+  const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
 
   // /start deep-link auth
   if (cmd.startsWith("/start")) {
@@ -50,6 +51,15 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       return;
     }
 
+    if (linkedUser) {
+      await sendTelegramRaw(
+        chatId,
+        "✅ <b>You are connected.</b>\n\nYour account is already linked. Paste any opportunity link and I'll track it.\n\n<b>Quick commands:</b>\n/status - Connection status\n/deadlines - Upcoming deadlines\n/help - All commands",
+        "HTML"
+      );
+      return;
+    }
+
     await sendTelegramRaw(
       chatId,
       "👋 <b>Welcome to DeadlineAI!</b>\n\nI track deadlines from any link you paste — hackathons, internships, grants, programs, and more.\n\n<b>Get started:</b>\n1️⃣ <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n2️⃣ Come back here and paste any link\n3️⃣ I'll extract the deadline and remind you daily\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/help - All commands\n\nJust paste a link to start!",
@@ -58,9 +68,27 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
+  // /status
+  if (cmd === "/status") {
+    if (linkedUser) {
+      await sendTelegramRaw(
+        chatId,
+        `✅ <b>Connected</b>\n\nLogged in as: <code>${linkedUser.email}</code>\n\nPaste any link to track deadlines.`,
+        "HTML"
+      );
+      return;
+    }
+    await sendTelegramRaw(
+      chatId,
+      "❌ <b>Not connected</b>\n\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>, then click Connect Telegram from app settings or extension.",
+      "HTML"
+    );
+    return;
+  }
+
   // /deadlines
   if (cmd === "/deadlines") {
-    const user = await prisma.user.findFirst({ where: { telegramId: chatId } });
+    const user = linkedUser;
     if (!user) {
       await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
       return;
@@ -103,7 +131,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   const url = extractUrl(text);
   if (url) {
     // Check if user exists
-    const user = await prisma.user.findFirst({ where: { telegramId: chatId } });
+    const user = linkedUser;
     if (!user) {
       await sendTelegramRaw(
         chatId,
@@ -150,9 +178,18 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   }
 
   // Unknown message
+  if (linkedUser) {
+    await sendTelegramRaw(
+      chatId,
+      "✅ You're connected.\n\n👉 Paste a link (like istocks.codes) and I'll track the deadline\n👉 Use /deadlines to see your deadlines\n👉 Use /status to verify connection",
+      "HTML"
+    );
+    return;
+  }
+
   await sendTelegramRaw(
     chatId,
-    "I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n👉 Use <b>/deadlines</b> to see your deadlines\n👉 Use <b>/help</b> for all commands",
+    "I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n👉 Use <b>/status</b> to check connection\n👉 Use <b>/help</b> for all commands",
     "HTML"
   );
 }
