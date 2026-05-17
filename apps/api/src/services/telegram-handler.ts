@@ -5,17 +5,39 @@ import { runTelegramAssistant } from "./telegram-assistant";
 
 // Detect if text contains a URL (with or without protocol)
 function extractUrl(text: string): string | null {
-  const trimmed = text.trim();
-  // Matches https://domain.com or domain.com/path
-  const match = trimmed.match(/(https?:\/\/\S+)|(\b[\w-]+\.[\w-]+(?:\/\S*)?\b)/i);
-  if (!match) return null;
-  const url = match[1] || match[2];
-  if (!url) return null;
-  // Add https:// if missing
-  if (!/^https?:\/\//i.test(url)) {
-    return `https://${url}`;
+  const candidates = text.match(/https?:\/\/[^\s<>"'`]+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[^\s<>"'`]*)?/gi) || [];
+
+  for (const rawCandidate of candidates) {
+    let cleaned = rawCandidate.trim();
+
+    // Remove common wrappers from both sides: (), [], {}, <>, quotes.
+    cleaned = cleaned.replace(/^[\(\[\{<"'`]+/, "");
+    cleaned = cleaned.replace(/[\)\]\}>"'`]+$/, "");
+
+    // Remove trailing punctuation / wrappers accidentally attached to links.
+    // Do this repeatedly so strings like "https://x.y/path)." become clean.
+    let prev = "";
+    while (cleaned !== prev) {
+      prev = cleaned;
+      cleaned = cleaned.replace(/[.,!?;:…]+$/g, "");
+      cleaned = cleaned.replace(/[\)\]\}>"'`]+$/g, "");
+    }
+
+    if (!cleaned) continue;
+
+    const withProtocol = /^https?:\/\//i.test(cleaned) ? cleaned : `https://${cleaned}`;
+
+    try {
+      const parsed = new URL(withProtocol);
+      if (!/^https?:$/.test(parsed.protocol)) continue;
+      if (!parsed.hostname || !parsed.hostname.includes(".")) continue;
+      return parsed.toString();
+    } catch {
+      continue;
+    }
   }
-  return url;
+
+  return null;
 }
 
 function formatRelativeDeadline(deadline: Date): string {
