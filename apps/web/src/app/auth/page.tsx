@@ -13,19 +13,26 @@ export default function AuthPage() {
     if (handled.current) return;
     handled.current = true;
 
+    const search = new URLSearchParams(window.location.search);
+    const tgLinkFromSearch = search.get("tgLink");
+    if (tgLinkFromSearch) {
+      sessionStorage.setItem("deadlineai_tg_link", tgLinkFromSearch);
+    }
+
     // Check if this is a Google OAuth redirect (has id_token in hash)
     const hash = window.location.hash;
     const params = new URLSearchParams(hash.replace("#", ""));
     const idToken = params.get("id_token");
+    const pendingTgLink = sessionStorage.getItem("deadlineai_tg_link");
 
     if (idToken) {
       // We're in a popup after OAuth redirect. Send token to parent (extension).
-      if (window.opener) {
+      if (window.opener && !pendingTgLink) {
         window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ID_TOKEN", idToken }, "*");
         window.close();
       } else {
         // If opened directly (not as popup), exchange token ourselves
-        exchangeToken(idToken);
+        exchangeToken(idToken, pendingTgLink || undefined);
       }
       return;
     }
@@ -38,7 +45,7 @@ export default function AuthPage() {
     }
   }, []);
 
-  async function exchangeToken(idToken: string) {
+  async function exchangeToken(idToken: string, telegramLinkToken?: string) {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
     try {
       const res = await fetch(`${apiUrl}/api/auth/google`, {
@@ -49,6 +56,19 @@ export default function AuthPage() {
       const data = await res.json();
       if (data.token) {
         localStorage.setItem("deadlineai_token", data.token);
+
+        if (telegramLinkToken) {
+          await fetch(`${apiUrl}/api/auth/telegram-connect`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${data.token}`,
+            },
+            body: JSON.stringify({ token: telegramLinkToken }),
+          }).catch(() => null);
+          sessionStorage.removeItem("deadlineai_tg_link");
+        }
+
         window.location.href = "/dashboard";
       }
     } catch (e) {

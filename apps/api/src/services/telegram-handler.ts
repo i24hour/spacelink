@@ -23,21 +23,39 @@ function extractUrl(text: string): string | null {
 }
 
 export async function handleTelegramMessage(chatId: string, text: string) {
-  const cmd = text.trim().toLowerCase();
+  const raw = text.trim();
+  const cmd = raw.toLowerCase();
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
+  const webAppUrl = process.env.WEB_APP_URL || "https://web-i24hours-projects.vercel.app";
+
+  async function connectThisChatUrl(): Promise<string> {
+    const { createTelegramChatLinkToken } = await import("../lib/auth.js");
+    const token = createTelegramChatLinkToken(chatId);
+    return `${webAppUrl}/auth?tgLink=${encodeURIComponent(token)}`;
+  }
 
   // /start deep-link auth
   if (cmd.startsWith("/start")) {
-    const token = cmd.split(" ")[1];
+    const token = raw.split(/\s+/)[1];
     if (token) {
       const { consumeTelegramLinkToken } = await import("../lib/auth.js");
       const userId = consumeTelegramLinkToken(token);
       if (userId) {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user) {
+          await sendTelegramRaw(chatId, "That link is no longer valid. Please generate a new connect link.", "HTML");
+          return;
+        }
+
+        const preferredChannels = user.preferredChannels.includes("telegram")
+          ? user.preferredChannels
+          : [...user.preferredChannels, "telegram"];
+
         await prisma.user.update({
           where: { id: userId },
           data: {
             telegramId: chatId,
-            preferredChannels: { set: ["telegram"] },
+            preferredChannels: { set: preferredChannels },
           },
         });
         await sendTelegramRaw(
@@ -62,7 +80,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
     await sendTelegramRaw(
       chatId,
-      "👋 <b>Welcome to DeadlineAI!</b>\n\nI track deadlines from any link you paste — hackathons, internships, grants, programs, and more.\n\n<b>Get started:</b>\n1️⃣ <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n2️⃣ Come back here and paste any link\n3️⃣ I'll extract the deadline and remind you daily\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/help - All commands\n\nJust paste a link to start!",
+      `👋 <b>Welcome to DeadlineAI!</b>\n\nI track deadlines from any link you paste — hackathons, internships, grants, programs, and more.\n\n<b>Get started:</b>\n1️⃣ <a href="${await connectThisChatUrl()}">Sign in with Google (connect this chat)</a>\n2️⃣ Come back here and paste any link\n3️⃣ I'll extract the deadline and remind you daily\n\n<b>Commands:</b>\n/status - Connection status\n/deadlines - Your upcoming deadlines\n/help - All commands\n\nJust paste a link to start!`,
       "HTML"
     );
     return;
@@ -80,7 +98,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     }
     await sendTelegramRaw(
       chatId,
-      "❌ <b>Not connected</b>\n\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>, then click Connect Telegram from app settings or extension.",
+      `❌ <b>Not connected</b>\n\n<a href="${await connectThisChatUrl()}">Sign in with Google and connect this Telegram chat</a>`,
       "HTML"
     );
     return;
@@ -135,7 +153,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     if (!user) {
       await sendTelegramRaw(
         chatId,
-        "🔐 <b>Please sign in first</b>\n\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Click here to Sign in with Google</a>\n\nThen come back and paste your link!",
+        `🔐 <b>Please sign in first</b>\n\n<a href="${await connectThisChatUrl()}">👉 Sign in with Google and connect this Telegram chat</a>\n\nThen come back and paste your link!`,
         "HTML"
       );
       return;
@@ -189,7 +207,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
   await sendTelegramRaw(
     chatId,
-    "I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n👉 Use <b>/status</b> to check connection\n👉 Use <b>/help</b> for all commands",
+    `I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href="${await connectThisChatUrl()}">Sign in with Google and connect this chat</a>\n👉 Use <b>/status</b> to check connection\n👉 Use <b>/help</b> for all commands`,
     "HTML"
   );
 }
