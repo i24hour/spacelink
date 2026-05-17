@@ -6,7 +6,7 @@ services:
     plan: starter
     branch: main
     rootDir: apps/api
-    buildCommand: cd ../../packages/db && npx prisma generate && cd ../../apps/api && npm install && npx tsc
+    buildCommand: npm install -g prisma@5.15.0 && cd ../../packages/db && npm install && npx prisma generate && cd ../../apps/api && npm install && npx tsc
     startCommand: cd apps/api && node dist/index.js
     envVars:
       - key: NODE_ENV
