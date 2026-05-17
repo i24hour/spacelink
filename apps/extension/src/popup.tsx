@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
 import "./style.css";
 
-const API_URL = process.env.PLASMO_PUBLIC_API_URL || "http://localhost:4000";
+const API_URL =
+  (typeof process !== "undefined" && process.env?.PLASMO_PUBLIC_API_URL) ||
+  "https://deadlineai-api.onrender.com";
+
+const WEB_URL =
+  (typeof process !== "undefined" && process.env?.PLASMO_PUBLIC_WEB_URL) ||
+  "https://web-i24hours-projects.vercel.app";
 
 type LinkItem = {
   id: string;
@@ -104,8 +111,7 @@ function IndexPopup() {
   }
 
   function startGoogleAuth() {
-    const webUrl = process.env.PLASMO_PUBLIC_WEB_URL || "http://localhost:3000";
-    window.open(`${webUrl}/auth`, "deadlineai_auth", "width=480,height=600");
+    window.open(`${WEB_URL}/auth`, "deadlineai_auth", "width=480,height=600");
   }
 
   function handleDisconnect() {
@@ -342,3 +348,8 @@ async function getActiveTabId(): Promise<number | undefined> {
 }
 
 export default IndexPopup;
+
+const root = document.getElementById("root");
+if (root) {
+  createRoot(root).render(<IndexPopup />);
+}
