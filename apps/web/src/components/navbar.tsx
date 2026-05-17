@@ -1,18 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { UserButton } from "@clerk/nextjs";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 export function Navbar() {
   const pathname = usePathname();
+  const [hasToken, setHasToken] = useState(false);
 
   const links = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/settings", label: "Settings" },
   ];
+
+  useEffect(() => {
+    const syncToken = () => setHasToken(!!localStorage.getItem("deadlineai_token"));
+    syncToken();
+    window.addEventListener("storage", syncToken);
+    window.addEventListener("focus", syncToken);
+    return () => {
+      window.removeEventListener("storage", syncToken);
+      window.removeEventListener("focus", syncToken);
+    };
+  }, []);
+
+  const signOut = () => {
+    localStorage.removeItem("deadlineai_token");
+    setHasToken(false);
+    window.location.href = "/auth";
+  };
 
   return (
     <header className="sticky top-0 z-40 w-full border-b bg-background/80 backdrop-blur">
@@ -33,7 +51,15 @@ export function Navbar() {
               {l.label}
             </Link>
           ))}
-          <UserButton afterSignOutUrl="/" />
+          {hasToken ? (
+            <Button size="sm" variant="outline" onClick={signOut}>
+              Sign out
+            </Button>
+          ) : (
+            <Button size="sm" asChild>
+              <Link href="/auth">Sign in</Link>
+            </Button>
+          )}
         </nav>
       </div>
     </header>

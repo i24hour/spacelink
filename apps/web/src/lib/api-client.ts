@@ -1,15 +1,14 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
-
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
 export function useApi() {
-  const { getToken } = useAuth();
-
   return {
     async fetcher(path: string, init?: RequestInit) {
-      const token = await getToken();
+      const token = localStorage.getItem("deadlineai_token");
+      if (!token) {
+        throw new Error("Sign in required");
+      }
       const res = await fetch(`${API_URL}${path}`, {
         ...init,
         headers: {

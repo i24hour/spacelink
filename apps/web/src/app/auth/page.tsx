@@ -71,7 +71,7 @@ export default function AuthPage() {
       `scope=${scope}&` +
       `nonce=${nonce}`;
 
-    window.open(url, "deadlineai_auth", "width=480,height=600");
+    window.location.href = url;
   }
 
   return (
