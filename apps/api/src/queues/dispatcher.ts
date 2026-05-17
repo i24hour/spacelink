@@ -32,7 +32,7 @@ export const reminderDispatchWorker = new Worker(
     const deadlineTime = link.extractedDeadline?.getTime() || Date.now();
     const minutesUntil = Math.max(0, (deadlineTime - Date.now()) / (1000 * 60));
 
-    const message = await generateReminderMessage(link, user, minutesUntil);
+    const message = await generateReminderMessage(link, user, minutesUntil, reminder.reminderType);
 
     let result: { delivered: boolean; error?: string; data?: any } = {
       delivered: false,
