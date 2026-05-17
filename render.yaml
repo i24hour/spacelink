@@ -28,7 +28,7 @@ services:
       - key: LITELLM_API_KEY
         sync: false
       - key: LITELLM_MODEL
-        value: "gpt-4o-mini"
+        value: "DeepSeek-V4-Pro"
       - key: FIRECRAWL_API_KEY
         sync: false
       - key: SMTP_HOST
