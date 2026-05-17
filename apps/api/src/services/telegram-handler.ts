@@ -2,15 +2,24 @@ import { prisma } from "../lib/prisma";
 import { sendTelegramRaw } from "../services/notifications/telegram";
 import { processExtractionFromUrl } from "./extraction-url";
 
-// Detect if text is a URL
+// Detect if text is a URL (with or without protocol)
 function isUrl(text: string): boolean {
-  return /^https?:\/\/\S+/i.test(text.trim());
+  return /^(https?:\/\/)?([\w-]+\.)+[\w-]+(\/\S*)?$/i.test(text.trim());
 }
 
-// Detect if text contains a URL
+// Detect if text contains a URL (with or without protocol)
 function extractUrl(text: string): string | null {
-  const match = text.trim().match(/(https?:\/\/\S+)/i);
-  return match ? match[1] : null;
+  const trimmed = text.trim();
+  // Matches https://domain.com or domain.com/path
+  const match = trimmed.match(/(https?:\/\/\S+)|(\b[\w-]+\.[\w-]+(?:\/\S*)?\b)/i);
+  if (!match) return null;
+  const url = match[1] || match[2];
+  if (!url) return null;
+  // Add https:// if missing
+  if (!/^https?:\/\//i.test(url)) {
+    return `https://${url}`;
+  }
+  return url;
 }
 
 export async function handleTelegramMessage(chatId: string, text: string) {
@@ -32,7 +41,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         });
         await sendTelegramRaw(
           chatId,
-          "🎉 Connected! Now you can paste any link here and I'll track deadlines for you.\n\n<b>Commands:</b>\n/deadlines - See upcoming\n/help - Show all commands",
+          "🎉 <b>You're connected!</b>\n\nNow just paste any link here (e.g. istocks.codes) and I'll:\n• Extract the deadline with AI\n• Track it for you\n• Send daily countdowns\n• Alert you every hour when it's urgent\n\n<b>Commands:</b>\n/deadlines - See your deadlines\n/help - All commands",
           "HTML"
         );
         return;
@@ -43,7 +52,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
     await sendTelegramRaw(
       chatId,
-      "👋 <b>DeadlineAI Bot</b>\n\nPaste any opportunity link here (hackathon, internship, grant, etc.) and I'll track the deadline for you.\n\n<b>Commands:</b>\n/deadlines - Upcoming deadlines\n/help - All commands",
+      "👋 <b>Welcome to DeadlineAI!</b>\n\nI track deadlines from any link you paste — hackathons, internships, grants, programs, and more.\n\n<b>Get started:</b>\n1️⃣ <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n2️⃣ Come back here and paste any link\n3️⃣ I'll extract the deadline and remind you daily\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/help - All commands\n\nJust paste a link to start!",
       "HTML"
     );
     return;
@@ -84,7 +93,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      "<b>DeadlineAI Bot</b>\n\nJust paste any link and I'll extract the deadline, track it, and remind you.\n\n<b>Commands:</b>\n/start - Connect account\n/deadlines - Show upcoming\n/help - This message\n\n<b>Reminders:</b>\n📊 Daily countdown until deadline\n⏰ Hourly alerts when 1 day left\n🤖 AI-powered smart messages",
+      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/help - This message",
       "HTML"
     );
     return;
@@ -98,7 +107,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     if (!user) {
       await sendTelegramRaw(
         chatId,
-        "You need to sign in first.\n\n1️⃣ Visit https://web-i24hours-projects.vercel.app/auth\n2️⃣ Sign in with Google\n3️⃣ Click 'Connect Telegram'\n\nThen paste links here!",
+        "🔐 <b>Please sign in first</b>\n\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Click here to Sign in with Google</a>\n\nThen come back and paste your link!",
         "HTML"
       );
       return;
@@ -143,7 +152,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   // Unknown message
   await sendTelegramRaw(
     chatId,
-    "I didn't understand that.\n\n👉 <b>Paste a link</b> to track a deadline\n👉 Use <b>/deadlines</b> to see upcoming deadlines\n👉 Use <b>/help</b> for all commands",
+    "I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href=\"https://web-i24hours-projects.vercel.app/auth\">Sign in with Google</a>\n👉 Use <b>/deadlines</b> to see your deadlines\n👉 Use <b>/help</b> for all commands",
     "HTML"
   );
 }
