@@ -6,7 +6,7 @@ services:
     plan: starter
     branch: main
     rootDir: apps/api
-    buildCommand: cd ../../packages/db && npm ci --include=dev && npx prisma generate && npm run build && cd ../../apps/api && npm ci --include=dev && npx tsc
+    buildCommand: npm install -g prisma@5.15.0 && cd ../../packages/db && npm ci --include=dev && npx prisma generate && npm run build && cd ../../apps/api && npm ci --include=dev && npx tsc
     startCommand: node dist/index.js
     envVars:
       - key: NODE_ENV
@@ -20,7 +20,7 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: GOOGLE_CLIENT_IDS
-        sync: false
+        value: "934376870482-jblo2jl6hk9ie2qd8bqeot9fpf0glpj9.apps.googleusercontent.com"
       - key: FRONTEND_URL
         value: "https://web-i24hours-projects.vercel.app"
       - key: LITELLM_PROXY_URL

@@ -5,10 +5,10 @@
   "description": "Save deadlines from any webpage.",
   "scripts": {
     "dev": "plasmo dev",
-    "build": "plasmo build"
+    "build": "node build.mjs"
   },
   "dependencies": {
-    "plasmo": "0.89.4",
+    "plasmo": "0.90.5",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
@@ -16,15 +16,28 @@
     "@types/chrome": "^0.0.268",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.4.5"
   },
   "manifest": {
-    "host_permissions": ["https://*/*", "http://*/*"],
-    "permissions": ["activeTab", "storage", "scripting", "tabs"],
+    "host_permissions": [
+      "https://*/*",
+      "http://*/*"
+    ],
+    "permissions": [
+      "activeTab",
+      "storage",
+      "scripting",
+      "tabs"
+    ],
     "web_accessible_resources": [
       {
-        "resources": ["assets/*"],
-        "matches": ["<all_urls>"]
+        "resources": [
+          "assets/*"
+        ],
+        "matches": [
+          "<all_urls>"
+        ]
       }
     ]
   }

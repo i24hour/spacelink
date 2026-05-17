@@ -1,0 +1,22 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]:
+      - link "DeadlineAI" [ref=e4] [cursor=pointer]:
+        - /url: /
+      - navigation [ref=e5]:
+        - link "Dashboard" [ref=e6] [cursor=pointer]:
+          - /url: /dashboard
+        - link "Settings" [ref=e7] [cursor=pointer]:
+          - /url: /settings
+        - link "Sign in" [ref=e8] [cursor=pointer]:
+          - /url: /auth
+  - main [ref=e9]:
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - heading "DeadlineAI" [level=1] [ref=e12]
+        - paragraph [ref=e13]: Sign in to save deadlines from any page.
+      - button "Sign in with Google" [ref=e14] [cursor=pointer]:
+        - img [ref=e15]
+        - text: Sign in with Google
+      - paragraph [ref=e20]: By signing in, you agree to receive deadline reminders via your connected channels.
+  - alert [ref=e21]
