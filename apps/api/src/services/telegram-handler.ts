@@ -22,6 +22,37 @@ function extractUrl(text: string): string | null {
   return url;
 }
 
+function formatRelativeDeadline(deadline: Date): string {
+  const diffMs = deadline.getTime() - Date.now();
+  const absMs = Math.abs(diffMs);
+  const absHours = absMs / (1000 * 60 * 60);
+
+  if (absHours < 48) {
+    const hours = Math.max(0.1, Math.round(absHours * 10) / 10);
+    return diffMs >= 0 ? `${hours}h left` : `${hours}h ago`;
+  }
+
+  const days = Math.ceil(absMs / (1000 * 60 * 60 * 24));
+  return diffMs >= 0 ? `${days}d left` : `${days}d ago`;
+}
+
+function formatDeadlineInTimezone(date: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
 export async function handleTelegramMessage(chatId: string, text: string) {
   const raw = text.trim();
   const cmd = raw.toLowerCase();
@@ -124,10 +155,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
     const lines = links.map((l, i) => {
       const date = l.extractedDeadline ? new Date(l.extractedDeadline).toLocaleDateString() : "TBD";
-      const daysLeft = l.extractedDeadline
-        ? Math.ceil((new Date(l.extractedDeadline).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-        : null;
-      const timeLeft = daysLeft != null && daysLeft >= 0 ? `${daysLeft}d left` : daysLeft != null ? `${Math.abs(daysLeft)}d ago` : "";
+      const timeLeft = l.extractedDeadline ? formatRelativeDeadline(new Date(l.extractedDeadline)) : "";
       return `${i + 1}. <b>${l.title}</b>\n   📅 ${date}${timeLeft ? ` · ${timeLeft}` : ""}${l.category ? ` · ${l.category}` : ""}${l.urgencyScore && l.urgencyScore >= 7 ? " 🔥" : ""}`;
     });
 
@@ -140,6 +168,43 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     await sendTelegramRaw(
       chatId,
       "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/help - This message",
+      "HTML"
+    );
+    return;
+  }
+
+  // Natural-language "time left in hours" questions
+  const asksTimeLeft =
+    /\b(hours?|hrs?)\b/.test(cmd) ||
+    /how much time/.test(cmd) ||
+    /time left/.test(cmd) ||
+    /remaining time/.test(cmd);
+
+  if (linkedUser && asksTimeLeft) {
+    const next = await prisma.savedLink.findFirst({
+      where: {
+        userId: linkedUser.id,
+        status: { in: ["active", "pending"] },
+        extractedDeadline: { gte: new Date() },
+      },
+      orderBy: { extractedDeadline: "asc" },
+    });
+
+    if (!next || !next.extractedDeadline) {
+      await sendTelegramRaw(
+        chatId,
+        "I couldn't find an upcoming deadline. Paste a link first, then ask me for hours left.",
+        "HTML"
+      );
+      return;
+    }
+
+    const deadline = new Date(next.extractedDeadline);
+    const diffHours = Math.max(0, Math.round(((deadline.getTime() - Date.now()) / (1000 * 60 * 60)) * 10) / 10);
+
+    await sendTelegramRaw(
+      chatId,
+      `⏳ <b>Time left</b>\n\n<b>${next.title}</b>\n~<b>${diffHours} hours</b> left\nDeadline: ${formatDeadlineInTimezone(deadline, linkedUser.timezone)}`,
       "HTML"
     );
     return;
@@ -165,7 +230,12 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     });
     if (existing) {
       const date = existing.extractedDeadline ? new Date(existing.extractedDeadline).toLocaleDateString() : "TBD";
-      await sendTelegramRaw(chatId, `⚠️ Already tracking this link!\n\n<b>${existing.title}</b>\n📅 ${date}\n\nUse /deadlines to see all.`, "HTML");
+      const left = existing.extractedDeadline ? formatRelativeDeadline(new Date(existing.extractedDeadline)) : "";
+      await sendTelegramRaw(
+        chatId,
+        `⚠️ Already tracking this link!\n\n<b>${existing.title}</b>\n📅 ${date}${left ? ` · ${left}` : ""}\n\nUse /deadlines to see all.`,
+        "HTML"
+      );
       return;
     }
 
@@ -179,13 +249,11 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       }
 
       const date = result.extractedDeadline ? new Date(result.extractedDeadline).toLocaleDateString() : "TBD";
-      const daysLeft = result.extractedDeadline
-        ? Math.ceil((new Date(result.extractedDeadline).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-        : null;
+      const left = result.extractedDeadline ? formatRelativeDeadline(new Date(result.extractedDeadline)) : "";
 
       await sendTelegramRaw(
         chatId,
-        `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date}${daysLeft != null ? ` · ${daysLeft}d left` : ""}${result.category ? `\n🏷 ${result.category}` : ""}${result.estimatedCompletionMinutes ? `\n⏱ ~${result.estimatedCompletionMinutes} min to complete` : ""}\n\nI'll send you daily countdowns and hourly alerts when the deadline is near.`,
+        `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date}${left ? ` · ${left}` : ""}${result.category ? `\n🏷 ${result.category}` : ""}${result.estimatedCompletionMinutes ? `\n⏱ ~${result.estimatedCompletionMinutes} min to complete` : ""}\n\nI'll send you daily countdowns and hourly alerts when the deadline is near.`,
         "HTML"
       );
     } catch (e: any) {
