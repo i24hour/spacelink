@@ -85,12 +85,13 @@ function formatDeadlineInTimezone(date: Date, timezone: string): string {
 
 type PendingDeadlineConfirmation = {
   linkId: string;
-  suggestedDeadlineIso?: string;
+  suggestedDeadlineIso: string | null;
   sourceUrl?: string;
   awaiting: "confirm" | "manual_date";
 };
 
 const pendingDeadlineConfirmations = new Map<string, PendingDeadlineConfirmation>();
+const lastDeadlineListByChat = new Map<string, string[]>();
 
 function isAffirmative(text: string): boolean {
   return /^(yes|y|ok|okay|right|correct|haan|ha|sahi)$/i.test(text.trim());
@@ -98,6 +99,17 @@ function isAffirmative(text: string): boolean {
 
 function isNegative(text: string): boolean {
   return /^(no|n|wrong|galat|nahi|nahin)$/i.test(text.trim());
+}
+
+function saysNoDeadline(text: string): boolean {
+  const s = text.trim().toLowerCase();
+  return (
+    s.includes("no deadline") ||
+    s.includes("no date") ||
+    s.includes("without deadline") ||
+    s === "skip" ||
+    s === "none"
+  );
 }
 
 async function parseDateFromUserText(input: string): Promise<Date | null> {
@@ -135,6 +147,48 @@ async function updateLinkDeadlineAndReschedule(linkId: string, deadline: Date) {
   await prisma.reminder.deleteMany({ where: { savedLinkId: linkId, sentStatus: "pending" } });
   await scheduleSmartRemindersForLink(updated as any);
   return updated;
+}
+
+async function clearLinkDeadlineAndPendingReminders(linkId: string) {
+  await prisma.savedLink.update({
+    where: { id: linkId },
+    data: {
+      extractedDeadline: null,
+      status: "active",
+    },
+  });
+  await prisma.reminder.deleteMany({ where: { savedLinkId: linkId, sentStatus: "pending" } });
+}
+
+async function deleteTrackedLink(userId: string, rawQuery: string, chatId: string) {
+  const query = rawQuery.trim();
+  if (!query) return null;
+
+  const asNumber = Number.parseInt(query, 10);
+  if (Number.isFinite(asNumber) && String(asNumber) === query) {
+    const ids = lastDeadlineListByChat.get(chatId) || [];
+    const idx = asNumber - 1;
+    if (idx >= 0 && idx < ids.length) {
+      const byId = await prisma.savedLink.findFirst({
+        where: { id: ids[idx], userId, status: { in: ["active", "pending"] } },
+      });
+      if (byId) return byId;
+    }
+  }
+
+  const links = await prisma.savedLink.findMany({
+    where: { userId, status: { in: ["active", "pending"] } },
+    orderBy: { updatedAt: "desc" },
+    take: 60,
+  });
+
+  const lower = query.toLowerCase();
+  return (
+    links.find((l) => l.url === query) ||
+    links.find((l) => l.title.toLowerCase().includes(lower)) ||
+    links.find((l) => l.url.toLowerCase().includes(lower)) ||
+    null
+  );
 }
 
 export async function handleTelegramMessage(chatId: string, text: string) {
@@ -245,8 +299,38 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       const timeLeft = l.extractedDeadline ? formatRelativeDeadline(new Date(l.extractedDeadline)) : "";
       return `${i + 1}. <b>${l.title}</b>\n   📅 ${date}${timeLeft ? ` · ${timeLeft}` : ""}${l.category ? ` · ${l.category}` : ""}${l.urgencyScore && l.urgencyScore >= 7 ? " 🔥" : ""}`;
     });
+    lastDeadlineListByChat.set(chatId, links.map((l) => l.id));
 
     await sendTelegramRaw(chatId, `<b>Your upcoming deadlines</b>\n\n${lines.join("\n\n")}`, "HTML");
+    return;
+  }
+
+  // /delete
+  if (cmd.startsWith("/delete")) {
+    if (!linkedUser) {
+      await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
+      return;
+    }
+
+    const query = raw.replace(/^\/delete\s*/i, "").trim();
+    if (!query) {
+      await sendTelegramRaw(
+        chatId,
+        "Usage: /delete <number|title|url>\n\nExample:\n/delete 2\n/delete a16z",
+        "HTML"
+      );
+      return;
+    }
+
+    const target = await deleteTrackedLink(linkedUser.id, query, chatId);
+    if (!target) {
+      await sendTelegramRaw(chatId, "I couldn't find that tracked link. Use /deadlines first, then /delete <number>.", "HTML");
+      return;
+    }
+
+    await prisma.savedLink.delete({ where: { id: target.id } });
+    pendingDeadlineConfirmations.delete(chatId);
+    await sendTelegramRaw(chatId, `🗑️ Deleted: <b>${target.title}</b>`, "HTML");
     return;
   }
 
@@ -254,7 +338,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/help - This message",
+      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message",
       "HTML"
     );
     return;
@@ -266,6 +350,12 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     if (pending && !detectedUrl) {
       if (pending.awaiting === "confirm") {
         if (isAffirmative(raw)) {
+          if (pending.suggestedDeadlineIso) {
+            const suggested = new Date(pending.suggestedDeadlineIso);
+            if (!Number.isNaN(suggested.getTime())) {
+              await updateLinkDeadlineAndReschedule(pending.linkId, suggested);
+            }
+          }
           pendingDeadlineConfirmations.delete(chatId);
           await sendTelegramRaw(
             chatId,
@@ -275,16 +365,25 @@ export async function handleTelegramMessage(chatId: string, text: string) {
           return;
         }
         if (isNegative(raw)) {
+          await clearLinkDeadlineAndPendingReminders(pending.linkId);
           pending.awaiting = "manual_date";
+          pending.suggestedDeadlineIso = null;
           pendingDeadlineConfirmations.set(chatId, pending);
           await sendTelegramRaw(
             chatId,
-            "Got it. Please send the correct deadline date/time (for example: 2026-06-30 11:59 PM IST).",
+            "Got it. I removed that suggested deadline.\n\nPlease send the correct date/time (example: 2026-06-30 11:59 PM IST), or type <b>no deadline</b>.",
             "HTML"
           );
           return;
         }
       } else if (pending.awaiting === "manual_date") {
+        if (saysNoDeadline(raw)) {
+          await clearLinkDeadlineAndPendingReminders(pending.linkId);
+          pendingDeadlineConfirmations.delete(chatId);
+          await sendTelegramRaw(chatId, "✅ Done. Kept this link without any deadline.", "HTML");
+          return;
+        }
+
         const parsed = await parseDateFromUserText(raw);
         if (parsed) {
           await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
@@ -296,6 +395,13 @@ export async function handleTelegramMessage(chatId: string, text: string) {
           );
           return;
         }
+
+        await sendTelegramRaw(
+          chatId,
+          "I couldn't parse that date. Send a clear date/time (example: 2026-06-30 11:59 PM IST) or type <b>no deadline</b>.",
+          "HTML"
+        );
+        return;
       }
     }
   }
@@ -382,6 +488,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       if (!result.extractedDeadline) {
         pendingDeadlineConfirmations.set(chatId, {
           linkId: result.id,
+          suggestedDeadlineIso: null,
           awaiting: "manual_date",
         });
         await sendTelegramRaw(
@@ -397,6 +504,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       const left = formatRelativeDeadline(deadline);
 
       if (extracted.deadlineSource === "search") {
+        await clearLinkDeadlineAndPendingReminders(result.id);
         pendingDeadlineConfirmations.set(chatId, {
           linkId: result.id,
           suggestedDeadlineIso: deadline.toISOString(),
@@ -406,7 +514,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
         await sendTelegramRaw(
           chatId,
-          `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date} · ${left}${result.category ? `\n🏷 ${result.category}` : ""}\n\nI found this date from latest web sources${extracted.deadlineEvidenceUrl ? ` (<a href="${extracted.deadlineEvidenceUrl}">source</a>)` : ""} because it was not explicit on the main page.\n\nReply <b>YES</b> to keep it, or <b>NO</b> to send the correct date.`,
+          `✅ <b>Link tracked</b>\n\n<b>${result.title}</b>\nSuggested deadline: ${date} · ${left}${result.category ? `\n🏷 ${result.category}` : ""}\n\nI found this from latest web sources${extracted.deadlineEvidenceUrl ? ` (<a href="${extracted.deadlineEvidenceUrl}">source</a>)` : ""} because it was not explicit on the main page.\n\nReply <b>YES</b> to save this deadline, or <b>NO</b> to remove it and enter your own date.`,
           "HTML"
         );
         return;

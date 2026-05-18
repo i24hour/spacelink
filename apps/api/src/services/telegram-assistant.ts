@@ -149,6 +149,20 @@ async function findLinkForQuery(userId: string, query: string) {
   );
 }
 
+async function deleteLinkForQuery(userId: string, query: string) {
+  const link = await findLinkForQuery(userId, query);
+  if (!link) return { ok: false, message: "No matching tracked link to delete." };
+  await prisma.savedLink.delete({ where: { id: link.id } });
+  return {
+    ok: true,
+    deleted: {
+      id: link.id,
+      title: link.title,
+      url: link.url,
+    },
+  };
+}
+
 async function refreshExistingLink(user: User, link: SavedLink): Promise<SavedLink> {
   let content = "";
   let title = link.title || link.url;
@@ -260,6 +274,12 @@ async function executeTool(user: User, name: string, args: Record<string, unknow
     };
   }
 
+  if (name === "delete_link") {
+    const query = typeof args.query === "string" ? args.query : "";
+    if (!query) return { ok: false, message: "Missing query." };
+    return await deleteLinkForQuery(user.id, query);
+  }
+
   return { ok: false, message: `Unknown tool: ${name}` };
 }
 
@@ -313,6 +333,20 @@ export async function runTelegramAssistant(user: User, message: string): Promise
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "delete_link",
+        description: "Delete a tracked link/deadline by title keyword or URL",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+          required: ["query"],
+        },
+      },
+    },
   ];
 
   const messages: any[] = [
@@ -322,7 +356,8 @@ export async function runTelegramAssistant(user: User, message: string): Promise
         "You are DeadlineAI Telegram assistant. Always answer user questions directly. " +
         "Use tools whenever deadlines or crawling are relevant. " +
         "When showing countdown, always use exact format: Xd Yh Zm Ws left, and include total minutes+seconds in parentheses. " +
-        "If user asks 'all things I have' or similar, call list_deadlines.",
+        "If user asks 'all things I have' or similar, call list_deadlines. " +
+        "If user asks to remove/delete a tracked item, call delete_link.",
     },
     {
       role: "system",
