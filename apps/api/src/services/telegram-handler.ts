@@ -1,6 +1,8 @@
 import { prisma } from "../lib/prisma";
 import { sendTelegramRaw } from "../services/notifications/telegram";
-import { processExtractionFromUrl } from "./extraction-url";
+import { extractWithLLM } from "../lib/llm";
+import { scheduleSmartRemindersForLink } from "./reminders-smart";
+import { extractUrlDataWithFallback, saveExtractedUrlData } from "./extraction-url";
 import { runTelegramAssistant } from "./telegram-assistant";
 
 // Detect if text contains a URL (with or without protocol)
@@ -81,9 +83,64 @@ function formatDeadlineInTimezone(date: Date, timezone: string): string {
   }
 }
 
+type PendingDeadlineConfirmation = {
+  linkId: string;
+  suggestedDeadlineIso?: string;
+  sourceUrl?: string;
+  awaiting: "confirm" | "manual_date";
+};
+
+const pendingDeadlineConfirmations = new Map<string, PendingDeadlineConfirmation>();
+
+function isAffirmative(text: string): boolean {
+  return /^(yes|y|ok|okay|right|correct|haan|ha|sahi)$/i.test(text.trim());
+}
+
+function isNegative(text: string): boolean {
+  return /^(no|n|wrong|galat|nahi|nahin)$/i.test(text.trim());
+}
+
+async function parseDateFromUserText(input: string): Promise<Date | null> {
+  const direct = new Date(input);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  const extracted = await extractWithLLM(`
+Extract a deadline date-time from this text.
+Text: ${input}
+
+Return JSON only:
+{
+  "deadline": "2026-05-20T23:59:00"
+}
+
+If no clear date exists, return:
+{ "deadline": null }
+`.trim());
+
+  if (!extracted || extracted.deadline == null) return null;
+  const parsed = new Date(extracted.deadline);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+async function updateLinkDeadlineAndReschedule(linkId: string, deadline: Date) {
+  const updated = await prisma.savedLink.update({
+    where: { id: linkId },
+    data: {
+      extractedDeadline: deadline,
+      status: "active",
+    },
+  });
+
+  await prisma.reminder.deleteMany({ where: { savedLinkId: linkId, sentStatus: "pending" } });
+  await scheduleSmartRemindersForLink(updated as any);
+  return updated;
+}
+
 export async function handleTelegramMessage(chatId: string, text: string) {
   const raw = text.trim();
   const cmd = raw.toLowerCase();
+  const detectedUrl = extractUrl(raw);
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
   const webAppUrl = process.env.WEB_APP_URL || "https://web-i24hours-projects.vercel.app";
 
@@ -203,6 +260,46 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
+  // Confirmation flow (only when deadline came from web-search fallback, not directly page content)
+  if (linkedUser) {
+    const pending = pendingDeadlineConfirmations.get(chatId);
+    if (pending && !detectedUrl) {
+      if (pending.awaiting === "confirm") {
+        if (isAffirmative(raw)) {
+          pendingDeadlineConfirmations.delete(chatId);
+          await sendTelegramRaw(
+            chatId,
+            "✅ Great, confirmed. I saved that deadline and reminders are active.",
+            "HTML"
+          );
+          return;
+        }
+        if (isNegative(raw)) {
+          pending.awaiting = "manual_date";
+          pendingDeadlineConfirmations.set(chatId, pending);
+          await sendTelegramRaw(
+            chatId,
+            "Got it. Please send the correct deadline date/time (for example: 2026-06-30 11:59 PM IST).",
+            "HTML"
+          );
+          return;
+        }
+      } else if (pending.awaiting === "manual_date") {
+        const parsed = await parseDateFromUserText(raw);
+        if (parsed) {
+          await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
+          pendingDeadlineConfirmations.delete(chatId);
+          await sendTelegramRaw(
+            chatId,
+            `✅ Updated deadline saved: <b>${formatDeadlineInTimezone(parsed, linkedUser.timezone)}</b>`,
+            "HTML"
+          );
+          return;
+        }
+      }
+    }
+  }
+
   // Natural-language "time left in hours" questions
   const asksTimeLeft =
     /\b(hours?|hrs?)\b/.test(cmd) ||
@@ -241,8 +338,8 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   }
 
   // URL detection - user pasted a link
-  const url = extractUrl(text);
-  if (url) {
+  if (detectedUrl) {
+    const url = detectedUrl;
     // Check if user exists
     const user = linkedUser;
     if (!user) {
@@ -274,20 +371,50 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     await sendTelegramRaw(chatId, "🔄 Reading the page and extracting deadline info...", "HTML");
 
     try {
-      const result = await processExtractionFromUrl(url, user.id);
-      if (!result) {
+      const extracted = await extractUrlDataWithFallback(url);
+      if (!extracted) {
         await sendTelegramRaw(chatId, "❌ Couldn't extract a deadline from this page. You can try saving it via the browser extension for better results.", "HTML");
         return;
       }
 
-      const date = result.extractedDeadline
-        ? formatDeadlineInTimezone(new Date(result.extractedDeadline), user.timezone)
-        : "TBD";
-      const left = result.extractedDeadline ? formatRelativeDeadline(new Date(result.extractedDeadline)) : "";
+      const result = await saveExtractedUrlData(url, user.id, extracted);
+
+      if (!result.extractedDeadline) {
+        pendingDeadlineConfirmations.set(chatId, {
+          linkId: result.id,
+          awaiting: "manual_date",
+        });
+        await sendTelegramRaw(
+          chatId,
+          `✅ <b>Saved</b>, but I could not find an explicit deadline yet.\n\n<b>${result.title}</b>\n📅 TBD\n\nIf you know the date, send it now (example: 2026-06-30 11:59 PM IST).`,
+          "HTML"
+        );
+        return;
+      }
+
+      const deadline = new Date(result.extractedDeadline);
+      const date = formatDeadlineInTimezone(deadline, user.timezone);
+      const left = formatRelativeDeadline(deadline);
+
+      if (extracted.deadlineSource === "search") {
+        pendingDeadlineConfirmations.set(chatId, {
+          linkId: result.id,
+          suggestedDeadlineIso: deadline.toISOString(),
+          sourceUrl: extracted.deadlineEvidenceUrl,
+          awaiting: "confirm",
+        });
+
+        await sendTelegramRaw(
+          chatId,
+          `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date} · ${left}${result.category ? `\n🏷 ${result.category}` : ""}\n\nI found this date from latest web sources${extracted.deadlineEvidenceUrl ? ` (<a href="${extracted.deadlineEvidenceUrl}">source</a>)` : ""} because it was not explicit on the main page.\n\nReply <b>YES</b> to keep it, or <b>NO</b> to send the correct date.`,
+          "HTML"
+        );
+        return;
+      }
 
       await sendTelegramRaw(
         chatId,
-        `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date}${left ? ` · ${left}` : ""}${result.category ? `\n🏷 ${result.category}` : ""}${result.estimatedCompletionMinutes ? `\n⏱ ~${result.estimatedCompletionMinutes} min to complete` : ""}\n\nI'll send you daily countdowns and hourly alerts when the deadline is near.`,
+        `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date} · ${left}${result.category ? `\n🏷 ${result.category}` : ""}${result.estimatedCompletionMinutes ? `\n⏱ ~${result.estimatedCompletionMinutes} min to complete` : ""}\n\nI'll send you daily countdowns and hourly alerts when the deadline is near.`,
         "HTML"
       );
     } catch (e: any) {
