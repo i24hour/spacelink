@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { reminderDispatchQueue } from "../queues/dispatcher";
+import { dispatchDueReminder } from "../services/reminder-dispatch";
 
 export function startCron() {
   const intervalMs = Number(process.env.CRON_INTERVAL_MS || "60000");
@@ -12,20 +12,23 @@ export function startCron() {
           sentStatus: "pending",
           reminderTime: { lte: now },
         },
+        orderBy: { reminderTime: "asc" },
         take: 100,
       });
 
+      if (due.length === 0) return;
+
+      let sent = 0;
       for (const r of due) {
-        await reminderDispatchQueue.add(
-          "send-reminder",
-          { reminderId: r.id },
-          { jobId: r.id }
-        );
+        try {
+          const result = await dispatchDueReminder(r.id);
+          if (result.delivered) sent += 1;
+        } catch (err) {
+          console.error(`Cron: failed reminder ${r.id}:`, err);
+        }
       }
 
-      if (due.length > 0) {
-        console.log(`Cron: enqueued ${due.length} due reminders`);
-      }
+      console.log(`Cron: dispatched ${sent}/${due.length} due reminders`);
     } catch (err) {
       console.error("Cron error:", err);
     }
