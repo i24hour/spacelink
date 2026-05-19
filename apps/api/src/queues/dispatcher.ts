@@ -32,7 +32,7 @@ export const reminderDispatchWorker = new Worker(
     const deadlineTime = link.extractedDeadline?.getTime() || Date.now();
     const minutesUntil = Math.max(0, (deadlineTime - Date.now()) / (1000 * 60));
 
-    const message = await generateReminderMessage(link, user, minutesUntil, reminder.reminderType);
+    const payload = await generateReminderMessage(link, user, minutesUntil, reminder.reminderType);
 
     let result: { delivered: boolean; error?: string; data?: any } = {
       delivered: false,
@@ -40,16 +40,16 @@ export const reminderDispatchWorker = new Worker(
     };
 
     if (reminder.channel === "email") {
-      result = await sendEmail(user.email, `Deadline reminder: ${link.title}`, message);
+      result = await sendEmail(user.email, `Deadline reminder: ${link.title}`, payload.text);
     } else if (reminder.channel === "telegram" && user.telegramId) {
-      result = await sendTelegramRaw(user.telegramId, message, "HTML");
+      result = await sendTelegramRaw(user.telegramId, payload.html, "HTML");
     } else if (reminder.channel === "whatsapp" && user.whatsappNumber) {
-      result = await sendWhatsApp(user.whatsappNumber, message);
+      result = await sendWhatsApp(user.whatsappNumber, payload.text);
     }
 
     await prisma.reminder.update({
       where: { id: reminderId },
-      data: { sentStatus: result.delivered ? "sent" : "failed", aiMessage: message },
+      data: { sentStatus: result.delivered ? "sent" : "failed", aiMessage: payload.text },
     });
 
     await prisma.notificationLog.create({
