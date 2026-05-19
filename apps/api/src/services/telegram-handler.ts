@@ -218,19 +218,25 @@ export async function handleTelegramCallback(
 
   const reminderPick = parseReminderScheduleCallback(data);
   if (reminderPick) {
-    const result = await applyReminderScheduleChoice(
+    await answerCallbackQuery(callbackQueryId, "Setting reminders…");
+    void applyReminderScheduleChoice(
       chatId,
       linkedUser.id,
       reminderPick.linkId,
       reminderPick.mode
-    );
-    await answerCallbackQuery(
-      callbackQueryId,
-      result.ok ? "Reminders scheduled" : "Could not set reminders"
-    );
-    if (result.ok) {
-      await sendTelegramRaw(chatId, result.message, "HTML");
-    }
+    )
+      .then((result) => {
+        if (result.ok) return sendTelegramRaw(chatId, result.message, "HTML");
+        return sendTelegramRaw(chatId, result.message, "HTML");
+      })
+      .catch((err) => {
+        console.error("Reminder schedule error:", err);
+        return sendTelegramRaw(
+          chatId,
+          "⚠️ Could not set reminders. Please tap the button once more.",
+          "HTML"
+        );
+      });
     return;
   }
 

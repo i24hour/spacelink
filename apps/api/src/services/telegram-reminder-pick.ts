@@ -114,14 +114,44 @@ export async function applyReminderScheduleChoice(
   const updated = await prisma.savedLink.findUnique({ where: { id: linkId } });
   if (!updated) return { ok: false as const, message: "Could not update link." };
 
+  const meta = (link.metadata || {}) as Record<string, unknown>;
+  if (meta.reminder_schedule === mode) {
+    const existing = await prisma.reminder.count({
+      where: { savedLinkId: linkId, sentStatus: "pending" },
+    });
+    if (existing > 0) {
+      return {
+        ok: true as const,
+        alreadySet: true as const,
+        message:
+          `✅ <b>Reminders already set</b> for this link (${existing} upcoming).`,
+      };
+    }
+  }
+
   const result = await scheduleSmartRemindersForLink(updated, mode);
   const label = REMINDER_SCHEDULE_LABELS[mode];
 
   const msLeft = new Date(link.extractedDeadline).getTime() - Date.now();
   const hourlyNote =
     msLeft <= 24 * 60 * 60 * 1000
-      ? "\n⏰ Hourly reminders are scheduled for the remaining time."
-      : "\n⏰ Hourly reminders will run in the final 24 hours before the deadline.";
+      ? "\n⏰ Hourly alerts every hour until the deadline."
+      : "\n⏰ Hourly alerts start in the final 24 hours before the deadline.";
+
+  let scheduleLine = "";
+  if (result && result.total > 0) {
+    const ch = result.channels.join(" + ");
+    const dailyN = result.daily / Math.max(1, result.channels.length);
+    const hourlyN = result.hourly / Math.max(1, result.channels.length);
+    scheduleLine =
+      `\n\n📬 <b>Scheduled:</b> ${dailyN} daily ping${dailyN === 1 ? "" : "s"}` +
+      (hourlyN > 0 ? `, then ~${hourlyN} hourly near the end` : "") +
+      ` · via ${escapeHtml(ch)}`;
+    if (result.channels.length > 1) {
+      scheduleLine +=
+        `\n<i>Using email and Telegram — turn one off in web Settings if you want fewer pings.</i>`;
+    }
+  }
 
   return {
     ok: true as const,
@@ -130,6 +160,6 @@ export async function applyReminderScheduleChoice(
       `<b>${escapeHtml(link.title)}</b>\n` +
       `📋 ${escapeHtml(label)}` +
       hourlyNote +
-      (result?.count ? `\n\n<i>${result.count} reminders queued.</i>` : ""),
+      scheduleLine,
   };
 }

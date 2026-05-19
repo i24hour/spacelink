@@ -2,7 +2,6 @@ import type { SavedLink } from "@deadlineai/db";
 import { DateTime } from "luxon";
 import { normalizeTimezone } from "../lib/timezones";
 import { prisma } from "../lib/prisma";
-import { reminderDispatchQueue } from "../queues/dispatcher";
 
 /** How daily countdown reminders are scheduled before the deadline */
 export type ReminderScheduleMode = "daily_all" | "daily_10d" | "daily_5d";
@@ -123,10 +122,19 @@ export async function persistReminderSchedule(linkId: string, mode: ReminderSche
   });
 }
 
+export type ReminderScheduleSummary = {
+  mode: ReminderScheduleMode;
+  total: number;
+  daily: number;
+  hourly: number;
+  finalHour: number;
+  channels: string[];
+};
+
 export async function scheduleSmartRemindersForLink(
   link: SavedLink,
   modeOverride?: ReminderScheduleMode
-) {
+): Promise<ReminderScheduleSummary | undefined> {
   const user = await prisma.user.findUnique({ where: { id: link.userId } });
   if (!user) return;
 
@@ -145,10 +153,12 @@ export async function scheduleSmartRemindersForLink(
   if (user.telegramId) channels.add("telegram");
   const channelList = [...channels];
 
-  const reminders: ReminderRow[] = [];
+  const dailyRows: ReminderRow[] = [];
+  const hourlyRows: ReminderRow[] = [];
+  const finalRows: ReminderRow[] = [];
 
   addDailyReminders(
-    reminders,
+    dailyRows,
     link.id,
     deadline,
     now,
@@ -157,12 +167,12 @@ export async function scheduleSmartRemindersForLink(
     daysUntil,
     user.timezone
   );
-  addHourlyLast24hReminders(reminders, link.id, deadline, now, channelList);
+  addHourlyLast24hReminders(hourlyRows, link.id, deadline, now, channelList);
 
   const oneHourBefore = new Date(deadline.getTime() - 60 * 60 * 1000);
   if (oneHourBefore > now) {
     for (const ch of channelList) {
-      reminders.push({
+      finalRows.push({
         savedLinkId: link.id,
         reminderTime: oneHourBefore,
         reminderType: "final_hour",
@@ -173,18 +183,27 @@ export async function scheduleSmartRemindersForLink(
     }
   }
 
-  const created = [];
-  for (const row of reminders) {
-    created.push(await prisma.reminder.create({ data: row }));
+  const reminders = [...dailyRows, ...hourlyRows, ...finalRows];
+  if (reminders.length === 0) {
+    return {
+      mode,
+      total: 0,
+      daily: 0,
+      hourly: 0,
+      finalHour: 0,
+      channels: channelList,
+    };
   }
 
-  for (const r of created) {
-    await reminderDispatchQueue.add(
-      "send-reminder",
-      { reminderId: r.id },
-      { delay: Math.max(0, r.reminderTime.getTime() - Date.now()) }
-    );
-  }
+  // Cron enqueues due rows every minute — no per-row BullMQ jobs at schedule time.
+  await prisma.reminder.createMany({ data: reminders });
 
-  return { mode, count: created.length };
+  return {
+    mode,
+    total: reminders.length,
+    daily: dailyRows.length,
+    hourly: hourlyRows.length,
+    finalHour: finalRows.length,
+    channels: channelList,
+  };
 }
