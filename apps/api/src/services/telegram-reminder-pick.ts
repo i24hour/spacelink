@@ -168,10 +168,16 @@ export async function applyReminderScheduleChoice(
     const ch = result.channels.join(" + ");
     const dailyN = result.daily / Math.max(1, result.channels.length);
     const hourlyN = result.hourly / Math.max(1, result.channels.length);
-    scheduleLine =
-      `\n\n📬 <b>Scheduled:</b> ${dailyN} daily ping${dailyN === 1 ? "" : "s"}` +
-      (hourlyN > 0 ? `, then ~${hourlyN} hourly near the end` : "") +
-      ` · via ${escapeHtml(ch)}`;
+    if (dailyN === 0 && hourlyN > 0) {
+      scheduleLine =
+        `\n\n📬 <b>Scheduled:</b> no 9 AM daily left (deadline too soon) — ` +
+        `~${hourlyN} hourly pings on the hour (6 PM, 7 PM, …) until deadline · via ${escapeHtml(ch)}`;
+    } else {
+      scheduleLine =
+        `\n\n📬 <b>Scheduled:</b> ${dailyN} daily ping${dailyN === 1 ? "" : "s"}` +
+        (hourlyN > 0 ? `, then ~${hourlyN} hourly on the hour near the end` : "") +
+        ` · via ${escapeHtml(ch)}`;
+    }
     if (result.channels.length > 1) {
       scheduleLine +=
         `\n<i>Using email and Telegram — turn one off in web Settings if you want fewer pings.</i>`;

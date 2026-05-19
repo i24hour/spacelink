@@ -73,35 +73,41 @@ function addDailyReminders(
   }
 }
 
-/** Hourly alerts for every hour in the final 24 hours before deadline (always on). */
+/** Hourly alerts on round clock hours in the user's timezone (final 24h before deadline). */
 function addHourlyLast24hReminders(
   reminders: ReminderRow[],
   linkId: string,
   deadline: Date,
   now: Date,
-  channels: string[]
+  channels: string[],
+  userTimezone: string
 ) {
-  const windowStart = new Date(deadline.getTime() - 24 * 60 * 60 * 1000);
-  let cursor = windowStart > now ? windowStart : new Date(now);
-  cursor.setMinutes(0, 0, 0);
-  if (cursor <= now) {
-    cursor = new Date(now);
-    cursor.setMinutes(0, 0, 0);
-    cursor.setHours(cursor.getHours() + 1);
+  const zone = normalizeTimezone(userTimezone);
+  const deadlineDt = DateTime.fromJSDate(deadline, { zone });
+  const nowDt = DateTime.fromJSDate(now, { zone });
+
+  const windowStart = deadlineDt.minus({ hours: 24 });
+  const startDt = nowDt > windowStart ? nowDt : windowStart;
+
+  // Next round hour in user's timezone (e.g. 5:30 PM → first ping at 6:00 PM).
+  let cursor = startDt.set({ minute: 0, second: 0, millisecond: 0 });
+  if (cursor <= nowDt) {
+    cursor = cursor.plus({ hours: 1 });
   }
 
-  while (cursor < deadline) {
+  while (cursor <= deadlineDt) {
+    const reminderDate = cursor.toJSDate();
     for (const ch of channels) {
       reminders.push({
         savedLinkId: linkId,
-        reminderTime: new Date(cursor),
+        reminderTime: reminderDate,
         reminderType: "hourly_urgent",
         channel: ch,
         sentStatus: "pending",
         aiMessage: null,
       });
     }
-    cursor.setHours(cursor.getHours() + 1);
+    cursor = cursor.plus({ hours: 1 });
   }
 }
 
@@ -167,9 +173,19 @@ export async function scheduleSmartRemindersForLink(
     daysUntil,
     user.timezone
   );
-  addHourlyLast24hReminders(hourlyRows, link.id, deadline, now, channelList);
+  addHourlyLast24hReminders(
+    hourlyRows,
+    link.id,
+    deadline,
+    now,
+    channelList,
+    user.timezone
+  );
 
-  const oneHourBefore = new Date(deadline.getTime() - 60 * 60 * 1000);
+  const deadlineDt = DateTime.fromJSDate(deadline, {
+    zone: normalizeTimezone(user.timezone),
+  });
+  const oneHourBefore = deadlineDt.minus({ hours: 1 }).toJSDate();
   if (oneHourBefore > now) {
     for (const ch of channelList) {
       finalRows.push({
