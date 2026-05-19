@@ -7,7 +7,14 @@ import {
   persistReminderSchedule,
   scheduleSmartRemindersForLink,
 } from "./reminders-smart";
-import { sendTelegramMessage, type InlineKeyboard } from "./notifications/telegram";
+import {
+  editTelegramMessage,
+  sendTelegramMessage,
+  type InlineKeyboard,
+} from "./notifications/telegram";
+
+/** Prevents parallel callback taps from stacking duplicate reminder rows. */
+const scheduleLocks = new Map<string, Promise<{ ok: boolean; alreadySet?: boolean; message: string }>>();
 
 function escapeHtml(text: string): string {
   return text
@@ -99,20 +106,32 @@ export async function applyReminderScheduleChoice(
   chatId: string,
   userId: string,
   linkId: string,
-  mode: ReminderScheduleMode
+  mode: ReminderScheduleMode,
+  options?: { promptMessageId?: number }
 ) {
+  const lockKey = `${linkId}:${mode}`;
+  const inFlight = scheduleLocks.get(lockKey);
+  if (inFlight) {
+    return {
+      ok: true as const,
+      alreadySet: true as const,
+      silent: true as const,
+      message: "",
+    };
+  }
+
+  const run = async (): Promise<{
+    ok: boolean;
+    alreadySet?: boolean;
+    silent?: boolean;
+    message: string;
+  }> => {
   const link = await prisma.savedLink.findFirst({
     where: { id: linkId, userId },
   });
   if (!link || !link.extractedDeadline) {
-    return { ok: false as const, message: "Link not found or has no deadline." };
+    return { ok: false, message: "Link not found or has no deadline." };
   }
-
-  await clearPendingRemindersForLink(linkId);
-  await persistReminderSchedule(linkId, mode);
-
-  const updated = await prisma.savedLink.findUnique({ where: { id: linkId } });
-  if (!updated) return { ok: false as const, message: "Could not update link." };
 
   const meta = (link.metadata || {}) as Record<string, unknown>;
   if (meta.reminder_schedule === mode) {
@@ -121,13 +140,19 @@ export async function applyReminderScheduleChoice(
     });
     if (existing > 0) {
       return {
-        ok: true as const,
-        alreadySet: true as const,
-        message:
-          `✅ <b>Reminders already set</b> for this link (${existing} upcoming).`,
+        ok: true,
+        alreadySet: true,
+        silent: true,
+        message: "",
       };
     }
   }
+
+  await clearPendingRemindersForLink(linkId);
+  await persistReminderSchedule(linkId, mode);
+
+  const updated = await prisma.savedLink.findUnique({ where: { id: linkId } });
+  if (!updated) return { ok: false, message: "Could not update link." };
 
   const result = await scheduleSmartRemindersForLink(updated, mode);
   const label = REMINDER_SCHEDULE_LABELS[mode];
@@ -153,13 +178,30 @@ export async function applyReminderScheduleChoice(
     }
   }
 
-  return {
-    ok: true as const,
-    message:
+  const confirmText =
       `✅ <b>Reminders set</b>\n\n` +
       `<b>${escapeHtml(link.title)}</b>\n` +
       `📋 ${escapeHtml(label)}` +
       hourlyNote +
-      scheduleLine,
+      scheduleLine;
+
+  if (options?.promptMessageId) {
+    await editTelegramMessage(chatId, options.promptMessageId, confirmText, {
+      parseMode: "HTML",
+    }).catch(() => {});
+  }
+
+  return {
+    ok: true,
+    message: options?.promptMessageId ? "" : confirmText,
   };
+  };
+
+  const promise = run();
+  scheduleLocks.set(lockKey, promise);
+  try {
+    return await promise;
+  } finally {
+    scheduleLocks.delete(lockKey);
+  }
 }

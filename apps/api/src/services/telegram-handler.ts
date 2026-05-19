@@ -218,14 +218,16 @@ export async function handleTelegramCallback(
 
   const reminderPick = parseReminderScheduleCallback(data);
   if (reminderPick) {
-    await answerCallbackQuery(callbackQueryId, "Setting reminders…");
+    await answerCallbackQuery(callbackQueryId, "Reminders set");
     void applyReminderScheduleChoice(
       chatId,
       linkedUser.id,
       reminderPick.linkId,
-      reminderPick.mode
+      reminderPick.mode,
+      { promptMessageId: messageId }
     )
       .then((result) => {
+        if (result.silent || !result.message) return;
         if (result.ok) return sendTelegramRaw(chatId, result.message, "HTML");
         return sendTelegramRaw(chatId, result.message, "HTML");
       })
