@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { answerCallbackQuery, sendTelegramRaw } from "../services/notifications/telegram";
-import { extractWithLLM } from "../lib/llm";
+import { parseDateFromUserText } from "./deadline-parse";
 import { clearPendingRemindersForLink } from "./reminders-smart";
 import { extractUrlDataWithFallback, saveExtractedUrlData } from "./extraction-url";
 import {
@@ -114,29 +114,6 @@ function saysNoDeadline(text: string): boolean {
     s === "skip" ||
     s === "none"
   );
-}
-
-async function parseDateFromUserText(input: string): Promise<Date | null> {
-  const direct = new Date(input);
-  if (!Number.isNaN(direct.getTime())) return direct;
-
-  const extracted = await extractWithLLM(`
-Extract a deadline date-time from this text.
-Text: ${input}
-
-Return JSON only:
-{
-  "deadline": "2026-05-20T23:59:00"
-}
-
-If no clear date exists, return:
-{ "deadline": null }
-`.trim());
-
-  if (!extracted || extracted.deadline == null) return null;
-  const parsed = new Date(extracted.deadline);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
 }
 
 async function updateLinkDeadlineAndReschedule(linkId: string, deadline: Date) {
@@ -418,7 +395,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
           return;
         }
 
-        const parsed = await parseDateFromUserText(raw);
+        const parsed = await parseDateFromUserText(raw, linkedUser.timezone);
         if (parsed) {
           const updated = await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
           pendingDeadlineConfirmations.delete(chatId);
@@ -555,12 +532,20 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
-  // Unknown message
+  // Natural language — LLM + database tools (set deadline, delete, refresh, etc.)
   if (linkedUser) {
     try {
-      const llmReply = await runTelegramAssistant(linkedUser, raw);
-      if (llmReply) {
-        await sendTelegramRaw(chatId, llmReply, "HTML");
+      const reply = await runTelegramAssistant(linkedUser, raw);
+      if (reply?.text) {
+        await sendTelegramRaw(chatId, reply.text, "HTML");
+        if (reply.reminderPickLinkId) {
+          const link = await prisma.savedLink.findUnique({
+            where: { id: reply.reminderPickLinkId },
+          });
+          if (link?.extractedDeadline) {
+            await sendReminderSchedulePrompt(chatId, link, linkedUser);
+          }
+        }
         return;
       }
     } catch (e) {

@@ -3,7 +3,14 @@ import { prisma } from "../lib/prisma";
 import { litellm, extractWithLLM } from "../lib/llm";
 import { scrapeUrl } from "../lib/firecrawl";
 import { processExtractionFromUrl } from "./extraction-url";
+import { parseDateFromUserText } from "./deadline-parse";
+import { findLinkForQuery } from "./link-search";
 import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
+
+export type TelegramAssistantReply = {
+  text: string;
+  reminderPickLinkId?: string;
+};
 
 type CountdownParts = {
   isPast: boolean;
@@ -99,7 +106,7 @@ function summarizeLinks(links: SavedLink[], timezone: string): string {
       const deadlineText = deadline
         ? `${formatDeadlineDate(deadline, timezone)} | ${formatCountdown(deadline)}`
         : "No deadline extracted";
-      return `${idx + 1}. ${link.title} | ${link.url} | ${deadlineText}`;
+      return `${idx + 1}. [id:${link.id.slice(0, 8)}] ${link.title} | ${deadlineText}`;
     })
     .join("\n");
 }
@@ -127,26 +134,69 @@ async function listDeadlines(user: User, limit = 10) {
   };
 }
 
-async function findLinkForQuery(userId: string, query: string) {
-  const q = query.trim();
-  if (!q) return null;
+async function setManualDeadline(user: User, query: string, deadlineText: string) {
+  const link = await findLinkForQuery(user.id, query);
+  if (!link) {
+    return {
+      ok: false,
+      message: `No tracked link matching "${query}". Use /list to see saved items.`,
+    };
+  }
 
-  const exactUrl = await prisma.savedLink.findFirst({
-    where: { userId, url: q, status: { in: ["active", "pending"] } },
+  const parsed = await parseDateFromUserText(deadlineText, user.timezone);
+  if (!parsed) {
+    return {
+      ok: false,
+      message: 'Could not parse that date. Try "19 May 2026" or "2026-05-19 11:59 PM".',
+    };
+  }
+
+  const prevMeta = ((link.metadata as Record<string, unknown>) || {}) as Record<string, unknown>;
+  await clearPendingRemindersForLink(link.id);
+
+  const updated = await prisma.savedLink.update({
+    where: { id: link.id },
+    data: {
+      extractedDeadline: parsed,
+      status: "active",
+      metadata: { ...prevMeta, deadline_source: "manual" } as object,
+    },
   });
-  if (exactUrl) return exactUrl;
 
-  const links = await prisma.savedLink.findMany({
-    where: { userId, status: { in: ["active", "pending"] } },
-    orderBy: { updatedAt: "desc" },
-    take: 50,
+  const meta = (updated.metadata || {}) as Record<string, unknown>;
+  const hasSchedule = Boolean(meta.reminder_schedule);
+
+  if (hasSchedule) {
+    await scheduleSmartRemindersForLink(updated as SavedLink);
+  }
+
+  return {
+    ok: true,
+    title: updated.title,
+    url: updated.url,
+    deadlineIso: parsed.toISOString(),
+    deadlineDisplay: formatDeadlineDate(parsed, user.timezone),
+    linkId: updated.id,
+    needsReminderPick: !hasSchedule,
+    message: hasSchedule
+      ? "Deadline saved and reminders rescheduled."
+      : "Deadline saved. User should pick a reminder schedule next.",
+  };
+}
+
+async function clearManualDeadline(user: User, query: string) {
+  const link = await findLinkForQuery(user.id, query);
+  if (!link) {
+    return { ok: false, message: `No tracked link matching "${query}".` };
+  }
+
+  await clearPendingRemindersForLink(link.id);
+  await prisma.savedLink.update({
+    where: { id: link.id },
+    data: { extractedDeadline: null, status: "active" },
   });
 
-  const lower = q.toLowerCase();
-  return (
-    links.find((l) => l.title.toLowerCase().includes(lower) || l.url.toLowerCase().includes(lower)) ||
-    null
-  );
+  return { ok: true, title: link.title, message: "Deadline cleared for this link." };
 }
 
 async function deleteLinkForQuery(userId: string, query: string) {
@@ -283,10 +333,28 @@ async function executeTool(user: User, name: string, args: Record<string, unknow
     return await deleteLinkForQuery(user.id, query);
   }
 
+  if (name === "set_manual_deadline") {
+    const query = typeof args.query === "string" ? args.query : "";
+    const deadlineText = typeof args.deadline_text === "string" ? args.deadline_text : "";
+    if (!query || !deadlineText) {
+      return { ok: false, message: "Need link query and deadline_text." };
+    }
+    return await setManualDeadline(user, query, deadlineText);
+  }
+
+  if (name === "clear_manual_deadline") {
+    const query = typeof args.query === "string" ? args.query : "";
+    if (!query) return { ok: false, message: "Missing query." };
+    return await clearManualDeadline(user, query);
+  }
+
   return { ok: false, message: `Unknown tool: ${name}` };
 }
 
-export async function runTelegramAssistant(user: User, message: string): Promise<string | null> {
+export async function runTelegramAssistant(
+  user: User,
+  message: string
+): Promise<TelegramAssistantReply | null> {
   const model = process.env.LITELLM_TOOL_MODEL || process.env.LITELLM_MODEL || "gpt-4o-mini";
   const recentLinks = await prisma.savedLink.findMany({
     where: { userId: user.id, status: { in: ["active", "pending"] } },
@@ -350,18 +418,56 @@ export async function runTelegramAssistant(user: User, message: string): Promise
         },
       },
     },
+    {
+      type: "function",
+      function: {
+        name: "set_manual_deadline",
+        description:
+          "Set or update the deadline for an existing tracked link using a user-provided date (not from crawling). Use when user says set/change/update deadline with a date. Match link by title keywords like YC grant, internshala, etc.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "Keywords to find the tracked link (title fragment)",
+            },
+            deadline_text: {
+              type: "string",
+              description: "The date/time the user provided, e.g. 19 May 2026",
+            },
+          },
+          required: ["query", "deadline_text"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "clear_manual_deadline",
+        description: "Remove the deadline from a tracked link (keep the link saved)",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+          },
+          required: ["query"],
+        },
+      },
+    },
   ];
 
   const messages: any[] = [
     {
       role: "system",
       content:
-        "You are DeadlineAI Telegram assistant. Always answer user questions directly. " +
-        "Use tools whenever deadlines or crawling are relevant. " +
-        "When showing countdown, always use exact format: Xd Yh Zm Ws left, and include total minutes+seconds in parentheses. " +
-        "Never use markdown tables or pipe characters. Use short bullet lines only. " +
-        "If user asks to list all tracked links/deadlines, tell them to use /list for the interactive list with delete buttons. " +
-        "If user asks to remove/delete a tracked item, call delete_link or suggest /list delete buttons.",
+        "You are DeadlineAI Telegram assistant. You operate on the user's database of saved links — not regex rules. " +
+        "Always use tools to read or change data. Never claim you can only use crawled page data. " +
+        "When the user sets or changes a deadline with a date they provide, call set_manual_deadline (query = title keywords, deadline_text = their date). " +
+        "Only call refresh_link_data when they explicitly ask to re-crawl or refresh from the website — not when they give a manual date. " +
+        "When showing countdown, use: Xd Yh Zm Ws left (total Nm Ss). No markdown tables. " +
+        "For listing links, tell them to use /list (interactive buttons). " +
+        "For delete, use delete_link or suggest /list delete buttons. " +
+        "Keep replies short (2-4 lines) in HTML-friendly plain text (no <tags> unless simple <b>).",
     },
     {
       role: "system",
@@ -371,6 +477,8 @@ export async function runTelegramAssistant(user: User, message: string): Promise
     },
     { role: "user", content: message },
   ];
+
+  let reminderPickLinkId: string | undefined;
 
   for (let i = 0; i < 5; i++) {
     const res: any = await litellm.chat.completions.create({
@@ -391,13 +499,35 @@ export async function runTelegramAssistant(user: User, message: string): Promise
 
     if (!toolCalls || toolCalls.length === 0) {
       const content = typeof choice.content === "string" ? choice.content.trim() : "";
-      return content || "I can help with deadline countdowns, listing your links, and refreshing site data.";
+      return {
+        text:
+          content ||
+          "I can set deadlines, list your links (/list), delete items, and refresh pages when you ask.",
+        reminderPickLinkId,
+      };
     }
 
     for (const call of toolCalls) {
       const name = call.function?.name || "";
       const args = safeJsonParse(call.function?.arguments);
       const toolResult = await executeTool(user, name, args);
+
+      const manualSet =
+        name === "set_manual_deadline" &&
+        toolResult &&
+        typeof toolResult === "object" &&
+        "ok" in toolResult &&
+        (toolResult as { ok?: boolean }).ok;
+
+      if (
+        manualSet &&
+        "needsReminderPick" in toolResult &&
+        (toolResult as { needsReminderPick?: boolean }).needsReminderPick &&
+        "linkId" in toolResult &&
+        typeof (toolResult as { linkId?: string }).linkId === "string"
+      ) {
+        reminderPickLinkId = (toolResult as { linkId: string }).linkId;
+      }
 
       messages.push({
         role: "tool",
@@ -407,5 +537,8 @@ export async function runTelegramAssistant(user: User, message: string): Promise
     }
   }
 
-  return "I couldn't complete that right now. Try asking with a specific link title or URL.";
+  return {
+    text: "I couldn't complete that right now. Try: Set deadline for YC grant 19 May 2026",
+    reminderPickLinkId,
+  };
 }
