@@ -1,0 +1,135 @@
+import type { SavedLink, User } from "@deadlineai/db";
+import { prisma } from "../lib/prisma";
+import {
+  REMINDER_SCHEDULE_LABELS,
+  type ReminderScheduleMode,
+  clearPendingRemindersForLink,
+  persistReminderSchedule,
+  scheduleSmartRemindersForLink,
+} from "./reminders-smart";
+import { sendTelegramMessage, type InlineKeyboard } from "./notifications/telegram";
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatDeadlineInTimezone(date: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+      timeZoneName: "short",
+    }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+export function buildReminderScheduleKeyboard(linkId: string): InlineKeyboard {
+  return {
+    inline_keyboard: [
+      [{ text: "📅 Daily reminders", callback_data: `rem:all:${linkId}` }],
+      [{ text: "📅 Daily · last 10 days", callback_data: `rem:10d:${linkId}` }],
+      [{ text: "📅 Daily · last 5 days", callback_data: `rem:5d:${linkId}` }],
+    ],
+  };
+}
+
+export function parseReminderScheduleCallback(
+  data: string
+): { mode: ReminderScheduleMode; linkId: string } | null {
+  const m = data.match(/^rem:(all|10d|5d):(.+)$/);
+  if (!m) return null;
+  const mode =
+    m[1] === "all" ? "daily_all" : m[1] === "10d" ? "daily_10d" : "daily_5d";
+  return { mode, linkId: m[2] };
+}
+
+export async function sendReminderSchedulePrompt(
+  chatId: string,
+  link: SavedLink,
+  user: User,
+  extra?: { category?: string | null; estimatedMinutes?: number | null }
+) {
+  const deadline = link.extractedDeadline ? new Date(link.extractedDeadline) : null;
+  if (!deadline) return;
+
+  const dateStr = formatDeadlineInTimezone(deadline, user.timezone);
+  const msLeft = deadline.getTime() - Date.now();
+  const hoursLeft = Math.max(0, Math.floor(msLeft / (1000 * 60 * 60)));
+  const inFinalDay = msLeft > 0 && msLeft <= 24 * 60 * 60 * 1000;
+
+  const category = extra?.category ?? link.category;
+  const est = extra?.estimatedMinutes ?? link.estimatedCompletionMinutes;
+
+  let text =
+    `✅ <b>Deadline found!</b>\n\n` +
+    `<b>${escapeHtml(link.title)}</b>\n` +
+    `📅 ${escapeHtml(dateStr)}`;
+
+  if (category) text += `\n🏷 ${escapeHtml(category)}`;
+  if (est) text += `\n⏱ ~${est} min to complete`;
+
+  text +=
+    `\n\n<b>Choose reminder style:</b>\n` +
+    `1️⃣ Daily — every day until deadline\n` +
+    `2️⃣ Daily — only in the last <b>10 days</b>\n` +
+    `3️⃣ Daily — only in the last <b>5 days</b>\n\n` +
+    `⏰ <i>All options include hourly alerts in the final 24 hours.</i>`;
+
+  if (inFinalDay) {
+    text += `\n\n⚡ <b>Less than 24h left</b> — hourly reminders will start right away (${hoursLeft}h remaining).`;
+  }
+
+  await sendTelegramMessage(chatId, text, {
+    parseMode: "HTML",
+    replyMarkup: buildReminderScheduleKeyboard(link.id),
+  });
+}
+
+export async function applyReminderScheduleChoice(
+  chatId: string,
+  userId: string,
+  linkId: string,
+  mode: ReminderScheduleMode
+) {
+  const link = await prisma.savedLink.findFirst({
+    where: { id: linkId, userId },
+  });
+  if (!link || !link.extractedDeadline) {
+    return { ok: false as const, message: "Link not found or has no deadline." };
+  }
+
+  await clearPendingRemindersForLink(linkId);
+  await persistReminderSchedule(linkId, mode);
+
+  const updated = await prisma.savedLink.findUnique({ where: { id: linkId } });
+  if (!updated) return { ok: false as const, message: "Could not update link." };
+
+  const result = await scheduleSmartRemindersForLink(updated, mode);
+  const label = REMINDER_SCHEDULE_LABELS[mode];
+
+  const msLeft = new Date(link.extractedDeadline).getTime() - Date.now();
+  const hourlyNote =
+    msLeft <= 24 * 60 * 60 * 1000
+      ? "\n⏰ Hourly reminders are scheduled for the remaining time."
+      : "\n⏰ Hourly reminders will run in the final 24 hours before the deadline.";
+
+  return {
+    ok: true as const,
+    message:
+      `✅ <b>Reminders set</b>\n\n` +
+      `<b>${escapeHtml(link.title)}</b>\n` +
+      `📋 ${escapeHtml(label)}` +
+      hourlyNote +
+      (result?.count ? `\n\n<i>${result.count} reminders queued.</i>` : ""),
+  };
+}

@@ -1,33 +1,94 @@
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 
-export async function sendTelegramRaw(chatId: string, text: string, parseMode?: string) {
+export type InlineKeyboardButton = {
+  text: string;
+  callback_data: string;
+};
+
+export type InlineKeyboard = {
+  inline_keyboard: InlineKeyboardButton[][];
+};
+
+type TelegramSendOptions = {
+  parseMode?: string;
+  replyMarkup?: InlineKeyboard;
+};
+
+async function telegramApi<T>(method: string, body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return (await res.json()) as T;
+}
+
+export async function sendTelegramMessage(
+  chatId: string,
+  text: string,
+  options?: TelegramSendOptions
+) {
   if (!TELEGRAM_BOT_TOKEN) {
     console.warn("Telegram bot token missing");
     return { delivered: false, error: "No bot token" };
   }
   try {
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-        headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: parseMode || undefined,
-      }),
-    });
-    const data = (await res.json()) as {
-      ok?: boolean;
-      description?: string;
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      text,
+      parse_mode: options?.parseMode || undefined,
+      reply_markup: options?.replyMarkup,
+      disable_web_page_preview: true,
     };
-    if (!data.ok && parseMode) {
-      // Retry without parse_mode in case markdown caused issues
-      return sendTelegramRaw(chatId, text);
+    const data = await telegramApi<{ ok?: boolean; description?: string }>("sendMessage", payload);
+    if (!data.ok && options?.parseMode) {
+      return sendTelegramMessage(chatId, text, { ...options, parseMode: undefined });
     }
     if (!data.ok) throw new Error(data.description || "Telegram API error");
     return { delivered: true, data };
-  } catch (err: any) {
-    return { delivered: false, error: err?.message || String(err) };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { delivered: false, error: message };
   }
+}
+
+export async function editTelegramMessage(
+  chatId: string,
+  messageId: number,
+  text: string,
+  options?: TelegramSendOptions
+) {
+  if (!TELEGRAM_BOT_TOKEN) {
+    return { delivered: false, error: "No bot token" };
+  }
+  try {
+    const data = await telegramApi<{ ok?: boolean; description?: string }>("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: options?.parseMode || undefined,
+      reply_markup: options?.replyMarkup,
+      disable_web_page_preview: true,
+    });
+    if (!data.ok) throw new Error(data.description || "Telegram API error");
+    return { delivered: true, data };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { delivered: false, error: message };
+  }
+}
+
+export async function answerCallbackQuery(callbackQueryId: string, text?: string) {
+  if (!TELEGRAM_BOT_TOKEN) return { ok: false };
+  return telegramApi("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text,
+    show_alert: false,
+  });
+}
+
+export async function sendTelegramRaw(chatId: string, text: string, parseMode?: string) {
+  return sendTelegramMessage(chatId, text, { parseMode: parseMode || undefined });
 }
 
 export async function sendTelegram(chatId: string, text: string) {

@@ -1,11 +1,26 @@
 import { Router } from "express";
-import { handleTelegramMessage } from "../services/telegram-handler";
+import { handleTelegramCallback, handleTelegramMessage } from "../services/telegram-handler";
 import { setTelegramWebhook } from "../services/notifications/telegram";
 
 const router = Router();
 
 router.post("/", async (req, res) => {
   const update = req.body;
+
+  const callback = update?.callback_query;
+  if (callback?.id && callback?.data) {
+    const chatId = callback.message?.chat?.id ?? callback.from?.id;
+    if (chatId) {
+      await handleTelegramCallback(
+        String(chatId),
+        String(callback.id),
+        String(callback.data),
+        callback.message?.message_id
+      );
+    }
+    return res.sendStatus(200);
+  }
+
   const msg = update?.message;
   const chatId = msg?.chat?.id;
   const text = msg?.text || "";

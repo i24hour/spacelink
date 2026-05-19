@@ -106,7 +106,8 @@ export async function extractUrlDataWithFallback(url: string): Promise<UrlExtrac
 export async function saveExtractedUrlData(
   url: string,
   userId: string,
-  data: UrlExtractionResult
+  data: UrlExtractionResult,
+  options?: { autoScheduleReminders?: boolean }
 ): Promise<SavedLink> {
   const link = await prisma.savedLink.create({
     data: {
@@ -126,8 +127,9 @@ export async function saveExtractedUrlData(
     },
   });
 
-  // Schedule smart reminders
-  await scheduleSmartRemindersForLink(link);
+  if (options?.autoScheduleReminders && link.extractedDeadline) {
+    await scheduleSmartRemindersForLink(link);
+  }
 
   return link;
 }

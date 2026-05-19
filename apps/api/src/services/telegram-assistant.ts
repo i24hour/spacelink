@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma";
 import { litellm, extractWithLLM } from "../lib/llm";
 import { scrapeUrl } from "../lib/firecrawl";
 import { processExtractionFromUrl } from "./extraction-url";
-import { scheduleSmartRemindersForLink } from "./reminders-smart";
+import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
 
 type CountdownParts = {
   isPast: boolean;
@@ -211,8 +211,11 @@ async function refreshExistingLink(user: User, link: SavedLink): Promise<SavedLi
     },
   });
 
-  await prisma.reminder.deleteMany({ where: { savedLinkId: link.id, sentStatus: "pending" } });
-  await scheduleSmartRemindersForLink(updated as SavedLink);
+  await clearPendingRemindersForLink(link.id);
+  const meta = (updated.metadata || {}) as Record<string, unknown>;
+  if (meta.reminder_schedule) {
+    await scheduleSmartRemindersForLink(updated as SavedLink);
+  }
 
   return updated as SavedLink;
 }
@@ -356,8 +359,9 @@ export async function runTelegramAssistant(user: User, message: string): Promise
         "You are DeadlineAI Telegram assistant. Always answer user questions directly. " +
         "Use tools whenever deadlines or crawling are relevant. " +
         "When showing countdown, always use exact format: Xd Yh Zm Ws left, and include total minutes+seconds in parentheses. " +
-        "If user asks 'all things I have' or similar, call list_deadlines. " +
-        "If user asks to remove/delete a tracked item, call delete_link.",
+        "Never use markdown tables or pipe characters. Use short bullet lines only. " +
+        "If user asks to list all tracked links/deadlines, tell them to use /list for the interactive list with delete buttons. " +
+        "If user asks to remove/delete a tracked item, call delete_link or suggest /list delete buttons.",
     },
     {
       role: "system",

@@ -1,9 +1,19 @@
 import { prisma } from "../lib/prisma";
-import { sendTelegramRaw } from "../services/notifications/telegram";
+import { answerCallbackQuery, sendTelegramRaw } from "../services/notifications/telegram";
 import { extractWithLLM } from "../lib/llm";
-import { scheduleSmartRemindersForLink } from "./reminders-smart";
+import { clearPendingRemindersForLink } from "./reminders-smart";
 import { extractUrlDataWithFallback, saveExtractedUrlData } from "./extraction-url";
+import {
+  applyReminderScheduleChoice,
+  parseReminderScheduleCallback,
+  sendReminderSchedulePrompt,
+} from "./telegram-reminder-pick";
 import { runTelegramAssistant } from "./telegram-assistant";
+import {
+  lastDeadlineListByChat,
+  refreshTrackedLinksListMessage,
+  sendTrackedLinksList,
+} from "./telegram-list";
 
 // Detect if text contains a URL (with or without protocol)
 function extractUrl(text: string): string | null {
@@ -89,7 +99,11 @@ type PendingDeadlineConfirmation = {
 };
 
 const pendingDeadlineConfirmations = new Map<string, PendingDeadlineConfirmation>();
-const lastDeadlineListByChat = new Map<string, string[]>();
+
+function normalizeCommand(raw: string): string {
+  const first = raw.trim().split(/\s+/)[0] || "";
+  return first.split("@")[0].toLowerCase();
+}
 
 function saysNoDeadline(text: string): boolean {
   const s = text.trim().toLowerCase();
@@ -134,8 +148,7 @@ async function updateLinkDeadlineAndReschedule(linkId: string, deadline: Date) {
     },
   });
 
-  await prisma.reminder.deleteMany({ where: { savedLinkId: linkId, sentStatus: "pending" } });
-  await scheduleSmartRemindersForLink(updated as any);
+  await clearPendingRemindersForLink(linkId);
   return updated;
 }
 
@@ -181,9 +194,89 @@ async function deleteTrackedLink(userId: string, rawQuery: string, chatId: strin
   );
 }
 
+export async function handleTelegramCallback(
+  chatId: string,
+  callbackQueryId: string,
+  data: string,
+  messageId?: number
+) {
+  const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
+  if (!linkedUser) {
+    await answerCallbackQuery(callbackQueryId, "Sign in first");
+    return;
+  }
+
+  if (data === "list:refresh" && messageId) {
+    await refreshTrackedLinksListMessage(chatId, messageId, linkedUser.id, linkedUser.timezone);
+    await answerCallbackQuery(callbackQueryId, "List updated");
+    return;
+  }
+
+  const reminderPick = parseReminderScheduleCallback(data);
+  if (reminderPick) {
+    const result = await applyReminderScheduleChoice(
+      chatId,
+      linkedUser.id,
+      reminderPick.linkId,
+      reminderPick.mode
+    );
+    await answerCallbackQuery(
+      callbackQueryId,
+      result.ok ? "Reminders scheduled" : "Could not set reminders"
+    );
+    if (result.ok) {
+      await sendTelegramRaw(chatId, result.message, "HTML");
+    }
+    return;
+  }
+
+  if (data.startsWith("del:")) {
+    const idx = Number.parseInt(data.slice(4), 10);
+    const ids = lastDeadlineListByChat.get(chatId) || [];
+    const linkId = ids[idx];
+
+    if (!linkId) {
+      await answerCallbackQuery(callbackQueryId, "List expired — send /list again");
+      return;
+    }
+
+    const link = await prisma.savedLink.findFirst({
+      where: { id: linkId, userId: linkedUser.id },
+    });
+
+    if (!link) {
+      await answerCallbackQuery(callbackQueryId, "Already removed");
+      if (messageId) {
+        await refreshTrackedLinksListMessage(
+          chatId,
+          messageId,
+          linkedUser.id,
+          linkedUser.timezone
+        );
+      }
+      return;
+    }
+
+    await prisma.savedLink.delete({ where: { id: link.id } });
+    pendingDeadlineConfirmations.delete(chatId);
+    await answerCallbackQuery(callbackQueryId, `Deleted: ${link.title.slice(0, 40)}`);
+
+    if (messageId) {
+      await refreshTrackedLinksListMessage(
+        chatId,
+        messageId,
+        linkedUser.id,
+        linkedUser.timezone
+      );
+    } else {
+      await sendTrackedLinksList(chatId, linkedUser.id, linkedUser.timezone);
+    }
+  }
+}
+
 export async function handleTelegramMessage(chatId: string, text: string) {
   const raw = text.trim();
-  const cmd = raw.toLowerCase();
+  const cmd = normalizeCommand(raw);
   const detectedUrl = extractUrl(raw);
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
   const webAppUrl = process.env.WEB_APP_URL || "https://web-i24hours-projects.vercel.app";
@@ -264,34 +357,13 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
-  // /deadlines
-  if (cmd === "/deadlines") {
-    const user = linkedUser;
-    if (!user) {
+  // /list and /deadlines — card-style list with inline delete buttons
+  if (cmd === "/list" || cmd === "/deadlines") {
+    if (!linkedUser) {
       await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
       return;
     }
-    const links = await prisma.savedLink.findMany({
-      where: { userId: user.id, status: { in: ["active", "pending"] } },
-      orderBy: { extractedDeadline: "asc" },
-      take: 15,
-    });
-
-    if (links.length === 0) {
-      await sendTelegramRaw(chatId, "No deadlines tracked yet. Paste a link here or save via the browser extension!", "HTML");
-      return;
-    }
-
-    const lines = links.map((l, i) => {
-      const date = l.extractedDeadline
-        ? formatDeadlineInTimezone(new Date(l.extractedDeadline), user.timezone)
-        : "TBD";
-      const timeLeft = l.extractedDeadline ? formatRelativeDeadline(new Date(l.extractedDeadline)) : "";
-      return `${i + 1}. <b>${l.title}</b>\n   📅 ${date}${timeLeft ? ` · ${timeLeft}` : ""}${l.category ? ` · ${l.category}` : ""}${l.urgencyScore && l.urgencyScore >= 7 ? " 🔥" : ""}`;
-    });
-    lastDeadlineListByChat.set(chatId, links.map((l) => l.id));
-
-    await sendTelegramRaw(chatId, `<b>Your upcoming deadlines</b>\n\n${lines.join("\n\n")}`, "HTML");
+    await sendTrackedLinksList(chatId, linkedUser.id, linkedUser.timezone);
     return;
   }
 
@@ -314,7 +386,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
     const target = await deleteTrackedLink(linkedUser.id, query, chatId);
     if (!target) {
-      await sendTelegramRaw(chatId, "I couldn't find that tracked link. Use /deadlines first, then /delete <number>.", "HTML");
+      await sendTelegramRaw(chatId, "I couldn't find that tracked link. Use /list first, then /delete <number>.", "HTML");
       return;
     }
 
@@ -328,7 +400,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/deadlines - Your upcoming deadlines\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message",
+      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message",
       "HTML"
     );
     return;
@@ -348,13 +420,9 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
         const parsed = await parseDateFromUserText(raw);
         if (parsed) {
-          await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
+          const updated = await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
           pendingDeadlineConfirmations.delete(chatId);
-          await sendTelegramRaw(
-            chatId,
-            `✅ Updated deadline saved: <b>${formatDeadlineInTimezone(parsed, linkedUser.timezone)}</b>`,
-            "HTML"
-          );
+          await sendReminderSchedulePrompt(chatId, updated, linkedUser);
           return;
         }
 
@@ -445,7 +513,9 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         return;
       }
 
-      const result = await saveExtractedUrlData(url, user.id, extracted);
+      const result = await saveExtractedUrlData(url, user.id, extracted, {
+        autoScheduleReminders: false,
+      });
 
       if (!result.extractedDeadline) {
         pendingDeadlineConfirmations.set(chatId, {
@@ -460,19 +530,28 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         return;
       }
 
-      const deadline = new Date(result.extractedDeadline);
-      const date = formatDeadlineInTimezone(deadline, user.timezone);
-      const left = formatRelativeDeadline(deadline);
-
-      await sendTelegramRaw(
-        chatId,
-        `✅ <b>Deadline tracked!</b>\n\n<b>${result.title}</b>\n📅 ${date} · ${left}${result.category ? `\n🏷 ${result.category}` : ""}${result.estimatedCompletionMinutes ? `\n⏱ ~${result.estimatedCompletionMinutes} min to complete` : ""}\n\nI'll send you daily countdowns and hourly alerts when the deadline is near.`,
-        "HTML"
-      );
+      await sendReminderSchedulePrompt(chatId, result, user, {
+        category: result.category,
+        estimatedMinutes: result.estimatedCompletionMinutes,
+      });
     } catch (e: any) {
       console.error("Telegram URL processing error:", e);
       await sendTelegramRaw(chatId, "❌ Error processing that link. Please try again or use the browser extension.", "HTML");
     }
+    return;
+  }
+
+  // Natural-language list requests (avoid LLM markdown tables)
+  const lowerRaw = raw.toLowerCase();
+  if (
+    linkedUser &&
+    (cmd === "list" ||
+      /^list\s+(all|my|everything)/.test(lowerRaw) ||
+      /^(show|get)\s+(all\s+)?(my\s+)?(links|deadlines|items)/.test(lowerRaw) ||
+      /^what\s+do\s+i\s+have/.test(lowerRaw) ||
+      /^all\s+(my\s+)?(links|deadlines|things)/.test(lowerRaw))
+  ) {
+    await sendTrackedLinksList(chatId, linkedUser.id, linkedUser.timezone);
     return;
   }
 
