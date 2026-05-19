@@ -57,7 +57,8 @@ export function buildTrackedLinksListMessage(
   if (links.length === 0) {
     return (
       "📭 <b>No upcoming links</b>\n\n" +
-      "Nothing active with a future deadline (or no deadline set). Paste a new URL to track."
+      "Nothing active with a future deadline (or no deadline set).\n\n" +
+      "<i>Past deadlines are hidden from this list — paste that link again to re-check it.</i>"
     );
   }
 

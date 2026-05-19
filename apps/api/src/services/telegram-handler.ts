@@ -7,7 +7,12 @@ import {
 import { answerCallbackQuery, sendTelegramRaw } from "../services/notifications/telegram";
 import { parseDateFromUserText } from "./deadline-parse";
 import { clearPendingRemindersForLink } from "./reminders-smart";
-import { extractUrlDataWithFallback, saveExtractedUrlData } from "./extraction-url";
+import {
+  extractUrlDataWithFallback,
+  isDeadlinePassed,
+  saveExtractedUrlData,
+  updateLinkFromExtraction,
+} from "./extraction-url";
 import {
   applyReminderScheduleChoice,
   parseReminderScheduleCallback,
@@ -533,35 +538,52 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       return;
     }
 
-    // Check for duplicates
     const existing = await prisma.savedLink.findFirst({
       where: { userId: user.id, url },
     });
-    if (existing) {
-      const date = existing.extractedDeadline
-        ? formatDeadlineInTimezone(new Date(existing.extractedDeadline), user.timezone)
-        : "TBD";
-      const left = existing.extractedDeadline ? formatRelativeDeadline(new Date(existing.extractedDeadline)) : "";
+
+    const stillUpcoming =
+      existing?.extractedDeadline && !isDeadlinePassed(existing.extractedDeadline);
+
+    if (existing && stillUpcoming) {
+      const date = formatDeadlineInTimezone(
+        new Date(existing.extractedDeadline!),
+        user.timezone
+      );
+      const left = formatRelativeDeadline(new Date(existing.extractedDeadline!));
       await sendTelegramRaw(
         chatId,
-        `⚠️ Already tracking this link!\n\n<b>${existing.title}</b>\n📅 ${date}${left ? ` · ${left}` : ""}\n\nUse /deadlines to see all.`,
+        `✅ <b>Already on your list</b>\n\n<b>${existing.title}</b>\n📅 ${date} · ${left}\n\nUse /list to see it.`,
         "HTML"
       );
       return;
     }
 
-    await sendTelegramRaw(chatId, "🔄 Reading the page and extracting deadline info...", "HTML");
+    const restarting = Boolean(existing);
+    await sendTelegramRaw(
+      chatId,
+      restarting
+        ? "🔄 Re-checking this link and updating the deadline…"
+        : "🔄 Reading the page and extracting deadline info...",
+      "HTML"
+    );
 
     try {
       const extracted = await extractUrlDataWithFallback(url, user.timezone);
       if (!extracted) {
-        await sendTelegramRaw(chatId, "❌ Couldn't extract a deadline from this page. You can try saving it via the browser extension for better results.", "HTML");
+        await sendTelegramRaw(
+          chatId,
+          "❌ Couldn't extract a deadline from this page. You can try saving it via the browser extension for better results.",
+          "HTML"
+        );
         return;
       }
 
-      const result = await saveExtractedUrlData(url, user.id, extracted, {
-        autoScheduleReminders: false,
-      });
+      const result = existing
+        ? await updateLinkFromExtraction(existing.id, extracted)
+        : await saveExtractedUrlData(url, user.id, extracted, {
+            autoScheduleReminders: false,
+          });
 
       if (!result.extractedDeadline) {
         pendingDeadlineConfirmations.set(chatId, {
@@ -570,10 +592,37 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         });
         await sendTelegramRaw(
           chatId,
-          `✅ <b>Saved</b>, but I could not find an explicit deadline yet.\n\n<b>${result.title}</b>\n📅 TBD\n\nIf you know the date, send it now (example: 2026-06-30 11:59 PM IST).`,
+          `✅ <b>${restarting ? "Updated" : "Saved"}</b>, but I could not find an explicit deadline yet.\n\n<b>${result.title}</b>\n📅 TBD\n\nIf you know the date, send it now (example: 2026-06-30 11:59 PM IST).`,
           "HTML"
         );
         return;
+      }
+
+      if (isDeadlinePassed(result.extractedDeadline)) {
+        const dateStr = formatDeadlineInTimezone(
+          new Date(result.extractedDeadline),
+          user.timezone
+        );
+        const ago = formatRelativeDeadline(new Date(result.extractedDeadline));
+        await sendTelegramRaw(
+          chatId,
+          `⏰ <b>This deadline has already passed</b>\n\n` +
+            `<b>${result.title}</b>\n` +
+            `📅 ${dateStr}\n` +
+            `(${ago})\n\n` +
+            `It won't appear in /list (only upcoming deadlines). ` +
+            `If the date on the page is wrong, send the correct date here or paste again after the site updates.`,
+          "HTML"
+        );
+        return;
+      }
+
+      if (restarting) {
+        await sendTelegramRaw(
+          chatId,
+          `♻️ <b>Link refreshed</b> — deadline is still upcoming. Pick reminders below.`,
+          "HTML"
+        );
       }
 
       await sendReminderSchedulePrompt(chatId, result, user, {

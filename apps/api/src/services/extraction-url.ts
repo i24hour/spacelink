@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma";
 import { scrapeUrl } from "../lib/firecrawl";
 import { extractWithLLM } from "../lib/llm";
 import { normalizeTimezone } from "../lib/timezones";
-import { scheduleSmartRemindersForLink } from "./reminders-smart";
+import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
 import type { SavedLink } from "@deadlineai/db";
 
 export type DeadlineSource = "page" | "none";
@@ -122,6 +122,44 @@ export async function extractUrlDataWithFallback(
         : null,
     deadlineSource,
   };
+}
+
+export function isDeadlinePassed(deadline: Date | string | null | undefined): boolean {
+  if (!deadline) return false;
+  return new Date(deadline).getTime() <= Date.now();
+}
+
+export async function updateLinkFromExtraction(
+  linkId: string,
+  data: UrlExtractionResult
+): Promise<SavedLink> {
+  const existing = await prisma.savedLink.findUnique({ where: { id: linkId } });
+  const meta = ((existing?.metadata as Record<string, unknown>) || {}) as Record<string, unknown>;
+  const { reminder_schedule: _removed, ...metaRest } = meta;
+
+  await clearPendingRemindersForLink(linkId);
+
+  const user = existing
+    ? await prisma.user.findUnique({ where: { id: existing.userId } })
+    : null;
+  const userZone = normalizeTimezone(user?.timezone || "UTC");
+
+  return prisma.savedLink.update({
+    where: { id: linkId },
+    data: {
+      title: data.title,
+      rawContent: data.rawContent,
+      extractedDeadline: data.extractedDeadline,
+      timezone: data.timezone || userZone,
+      category: data.category,
+      urgencyScore: data.urgencyScore,
+      confidenceScore: data.confidenceScore,
+      rollingApplication: data.rollingApplication,
+      estimatedCompletionMinutes: data.estimatedCompletionMinutes,
+      status: "active",
+      metadata: { ...metaRest, deadline_source: data.deadlineSource } as object,
+    },
+  });
 }
 
 export async function saveExtractedUrlData(
