@@ -12,25 +12,26 @@ type UserProfile = {
   id: string;
   email: string;
   timezone: string;
+  timezoneConfigured?: boolean;
   preferredChannels: string[];
   telegramId?: string;
   telegramConnected: boolean;
   plan: string;
 };
 
-const timezones = [
-  "UTC",
-  "America/Los_Angeles",
-  "America/New_York",
-  "America/Chicago",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Asia/Dubai",
-  "Asia/Kolkata",
-  "Asia/Singapore",
-  "Asia/Tokyo",
-  "Australia/Sydney",
+const timezones: { id: string; label: string }[] = [
+  { id: "Asia/Kolkata", label: "India (IST)" },
+  { id: "America/Los_Angeles", label: "US Pacific (PT / PST)" },
+  { id: "America/Denver", label: "US Mountain (MT)" },
+  { id: "America/Chicago", label: "US Central (CT)" },
+  { id: "America/New_York", label: "US Eastern (ET / EST)" },
+  { id: "Europe/London", label: "UK (GMT / BST)" },
+  { id: "Europe/Paris", label: "Europe (CET)" },
+  { id: "Asia/Dubai", label: "Gulf (GST)" },
+  { id: "Asia/Singapore", label: "Singapore (SGT)" },
+  { id: "Asia/Tokyo", label: "Japan (JST)" },
+  { id: "Australia/Sydney", label: "Australia (AEST)" },
+  { id: "UTC", label: "UTC" },
 ];
 
 const channels = [
@@ -189,17 +190,22 @@ export default function SettingsPage() {
 
           <div className="space-y-2">
             <label className="text-sm font-medium">Timezone</label>
+            {!user.timezoneConfigured && (
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+                Choose your timezone so deadlines and reminders match your local time (IST, PT, PST, etc.).
+              </p>
+            )}
             <Select
               value={user.timezone}
-              onValueChange={(v) => setUser({ ...user, timezone: v })}
+              onValueChange={(v) => setUser({ ...user, timezone: v, timezoneConfigured: true })}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select timezone" />
               </SelectTrigger>
               <SelectContent>
                 {timezones.map((tz) => (
-                  <SelectItem key={tz} value={tz}>
-                    {tz}
+                  <SelectItem key={tz.id} value={tz.id}>
+                    {tz.label}
                   </SelectItem>
                 ))}
               </SelectContent>

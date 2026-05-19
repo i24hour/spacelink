@@ -1,15 +1,9 @@
 import { DateTime } from "luxon";
 import { extractWithLLM } from "../lib/llm";
+import { normalizeTimezone } from "../lib/timezones";
 
 function resolveTimezone(timezoneHint?: string): string {
-  const tz = (timezoneHint || "UTC").trim();
-  if (!tz) return "UTC";
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone: tz });
-    return tz;
-  } catch {
-    return "UTC";
-  }
+  return normalizeTimezone(timezoneHint || "UTC");
 }
 
 /** True when user gave a calendar date without a specific time. */

@@ -9,6 +9,7 @@ import {
   parseDateFromUserText,
 } from "./deadline-parse";
 import { findLinkForQuery } from "./link-search";
+import { normalizeTimezone } from "../lib/timezones";
 import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
 
 export type TelegramAssistantReply = {
@@ -258,7 +259,10 @@ async function refreshExistingLink(user: User, link: SavedLink): Promise<SavedLi
       title: (typeof extraction.title === "string" && extraction.title) ? extraction.title : title,
       rawContent: content || link.rawContent,
       extractedDeadline: extractedDeadline ?? link.extractedDeadline,
-      timezone: (typeof extraction.timezone === "string" && extraction.timezone) ? extraction.timezone : link.timezone,
+      timezone:
+        typeof extraction.timezone === "string" && extraction.timezone
+          ? normalizeTimezone(extraction.timezone)
+          : link.timezone,
       category: (typeof extraction.category === "string" && extraction.category) ? extraction.category : link.category,
       urgencyScore: urgency,
       confidenceScore: confidence,

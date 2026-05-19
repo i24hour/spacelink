@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { universalAuth, AuthRequest } from "../lib/universal-auth";
 import { prisma } from "../lib/prisma";
+import { normalizeTimezone } from "../lib/timezones";
 import { z } from "zod";
 
 const router = Router();
@@ -14,6 +15,7 @@ router.get("/me", universalAuth, async (req: AuthRequest, res: any) => {
       id: user.id,
       email: user.email,
       timezone: user.timezone,
+      timezoneConfigured: user.timezoneConfigured,
       preferredChannels: user.preferredChannels,
       telegramId: user.telegramId,
       telegramConnected: !!user.telegramId,
@@ -34,14 +36,33 @@ router.patch("/me", universalAuth, async (req: AuthRequest, res: any) => {
       telegramId: z.string().optional(),
     });
     const data = schema.parse(req.body);
+    const update: {
+      timezone?: string;
+      timezoneConfigured?: boolean;
+      preferredChannels?: string[];
+      telegramId?: string;
+    } = {};
+
+    if (data.timezone !== undefined) {
+      update.timezone = normalizeTimezone(data.timezone);
+      update.timezoneConfigured = true;
+    }
+    if (data.preferredChannels !== undefined) {
+      update.preferredChannels = data.preferredChannels;
+    }
+    if (data.telegramId !== undefined) {
+      update.telegramId = data.telegramId;
+    }
+
     const updated = await prisma.user.update({
       where: { id: userId },
-      data,
+      data: update,
     });
     return res.json({
       id: updated.id,
       email: updated.email,
       timezone: updated.timezone,
+      timezoneConfigured: updated.timezoneConfigured,
       preferredChannels: updated.preferredChannels,
       telegramId: updated.telegramId,
       telegramConnected: !!updated.telegramId,

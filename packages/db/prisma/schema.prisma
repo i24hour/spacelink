@@ -13,8 +13,9 @@ model User {
   telegramId        String?  @map("telegram_id")
   whatsappNumber    String?  @map("whatsapp_number")
   preferredChannels String[] @default(["email"]) @map("preferred_channels")
-  timezone          String   @default("UTC")
-  plan              String   @default("free")
+  timezone            String   @default("UTC")
+  timezoneConfigured  Boolean  @default(false) @map("timezone_configured")
+  plan                String   @default("free")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
 

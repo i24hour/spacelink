@@ -1,4 +1,9 @@
 import { prisma } from "../lib/prisma";
+import {
+  formatNowInTimezone,
+  needsTimezoneSetup,
+  timezoneLabel,
+} from "../lib/timezones";
 import { answerCallbackQuery, sendTelegramRaw } from "../services/notifications/telegram";
 import { parseDateFromUserText } from "./deadline-parse";
 import { clearPendingRemindersForLink } from "./reminders-smart";
@@ -14,6 +19,11 @@ import {
   refreshTrackedLinksListMessage,
   sendTrackedLinksList,
 } from "./telegram-list";
+import {
+  applyTimezoneChoice,
+  parseTimezoneCallback,
+  sendTimezoneSetupPrompt,
+} from "./telegram-timezone-pick";
 
 // Detect if text contains a URL (with or without protocol)
 function extractUrl(text: string): string | null {
@@ -140,6 +150,15 @@ async function clearLinkDeadlineAndPendingReminders(linkId: string) {
   await prisma.reminder.deleteMany({ where: { savedLinkId: linkId, sentStatus: "pending" } });
 }
 
+async function blockUntilTimezoneConfigured(
+  chatId: string,
+  user: { timezone: string; timezoneConfigured: boolean }
+): Promise<boolean> {
+  if (!needsTimezoneSetup(user)) return false;
+  await sendTimezoneSetupPrompt(chatId);
+  return true;
+}
+
 async function deleteTrackedLink(userId: string, rawQuery: string, chatId: string) {
   const query = rawQuery.trim();
   if (!query) return null;
@@ -180,6 +199,14 @@ export async function handleTelegramCallback(
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
   if (!linkedUser) {
     await answerCallbackQuery(callbackQueryId, "Sign in first");
+    return;
+  }
+
+  const tzChoice = parseTimezoneCallback(data);
+  if (tzChoice) {
+    const result = await applyTimezoneChoice(chatId, linkedUser.id, tzChoice);
+    await answerCallbackQuery(callbackQueryId, "Timezone saved");
+    await sendTelegramRaw(chatId, result.message, "HTML");
     return;
   }
 
@@ -288,11 +315,15 @@ export async function handleTelegramMessage(chatId: string, text: string) {
             preferredChannels: { set: preferredChannels },
           },
         });
+        const connected = await prisma.user.findUnique({ where: { id: userId } });
         await sendTelegramRaw(
           chatId,
-          "🎉 <b>You're connected!</b>\n\nNow just paste any link here (e.g. istocks.codes) and I'll:\n• Extract the deadline with AI\n• Track it for you\n• Send daily countdowns\n• Alert you every hour when it's urgent\n\n<b>Commands:</b>\n/deadlines - See your deadlines\n/help - All commands",
+          "🎉 <b>You're connected!</b>\n\nNow just paste any link here and I'll extract deadlines, track them, and remind you.",
           "HTML"
         );
+        if (connected && needsTimezoneSetup(connected)) {
+          await sendTimezoneSetupPrompt(chatId);
+        }
         return;
       }
       await sendTelegramRaw(chatId, "That link expired. Open the extension and click Connect Telegram again.", "HTML");
@@ -300,6 +331,10 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     }
 
     if (linkedUser) {
+      if (needsTimezoneSetup(linkedUser)) {
+        await sendTimezoneSetupPrompt(chatId);
+        return;
+      }
       await sendTelegramRaw(
         chatId,
         "✅ <b>You are connected.</b>\n\nYour account is already linked. Paste any opportunity link and I'll track it.\n\n<b>Quick commands:</b>\n/status - Connection status\n/deadlines - Upcoming deadlines\n/help - All commands",
@@ -316,12 +351,30 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
+  // /timezone — change or set timezone anytime
+  if (cmd === "/timezone") {
+    if (!linkedUser) {
+      await sendTelegramRaw(
+        chatId,
+        `❌ Sign in first.\n\n<a href="${await connectThisChatUrl()}">Connect with Google</a>`,
+        "HTML"
+      );
+      return;
+    }
+    await sendTimezoneSetupPrompt(chatId);
+    return;
+  }
+
   // /status
   if (cmd === "/status") {
     if (linkedUser) {
+      const nowStr = formatNowInTimezone(linkedUser.timezone);
+      const tzLine = needsTimezoneSetup(linkedUser)
+        ? "⚠️ <b>Timezone not set</b> — tap /timezone to choose IST, PT, PST, etc."
+        : `🌍 Timezone: <b>${timezoneLabel(linkedUser.timezone)}</b>\n🕐 Now: <b>${nowStr}</b>`;
       await sendTelegramRaw(
         chatId,
-        `✅ <b>Connected</b>\n\nLogged in as: <code>${linkedUser.email}</code>\n\nPaste any link to track deadlines.`,
+        `✅ <b>Connected</b>\n\nLogged in as: <code>${linkedUser.email}</code>\n\n${tzLine}\n\nPaste any link to track deadlines.`,
         "HTML"
       );
       return;
@@ -340,6 +393,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
       return;
     }
+    if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
     await sendTrackedLinksList(chatId, linkedUser.id, linkedUser.timezone);
     return;
   }
@@ -350,6 +404,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
       return;
     }
+    if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
 
     const query = raw.replace(/^\/delete\s*/i, "").trim();
     if (!query) {
@@ -377,7 +432,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Paste any link here (e.g. istocks.codes)\n3️⃣ AI extracts the deadline\n4️⃣ Get daily countdowns + hourly alerts when urgent\n\n<b>Commands:</b>\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message",
+      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message",
       "HTML"
     );
     return;
@@ -385,6 +440,8 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
   // Manual date flow when a saved link has no on-page deadline (TBD)
   if (linkedUser) {
+    if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
+
     const pending = pendingDeadlineConfirmations.get(chatId);
     if (pending && !detectedUrl) {
       if (pending.awaiting === "manual_date") {
@@ -421,6 +478,8 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     /remaining time/.test(cmd);
 
   if (linkedUser && asksTimeLeft) {
+    if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
+
     const next = await prisma.savedLink.findFirst({
       where: {
         userId: linkedUser.id,
@@ -455,6 +514,8 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     const url = detectedUrl;
     // Check if user exists
     const user = linkedUser;
+    if (user && (await blockUntilTimezoneConfigured(chatId, user))) return;
+
     if (!user) {
       await sendTelegramRaw(
         chatId,
@@ -484,7 +545,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     await sendTelegramRaw(chatId, "🔄 Reading the page and extracting deadline info...", "HTML");
 
     try {
-      const extracted = await extractUrlDataWithFallback(url);
+      const extracted = await extractUrlDataWithFallback(url, user.timezone);
       if (!extracted) {
         await sendTelegramRaw(chatId, "❌ Couldn't extract a deadline from this page. You can try saving it via the browser extension for better results.", "HTML");
         return;
@@ -528,12 +589,15 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       /^what\s+do\s+i\s+have/.test(lowerRaw) ||
       /^all\s+(my\s+)?(links|deadlines|things)/.test(lowerRaw))
   ) {
+    if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
     await sendTrackedLinksList(chatId, linkedUser.id, linkedUser.timezone);
     return;
   }
 
   // Natural language — LLM + database tools (set deadline, delete, refresh, etc.)
   if (linkedUser) {
+    if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
+
     try {
       const reply = await runTelegramAssistant(linkedUser, raw);
       if (reply?.text) {

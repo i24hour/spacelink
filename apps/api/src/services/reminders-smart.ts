@@ -1,4 +1,6 @@
 import type { SavedLink } from "@deadlineai/db";
+import { DateTime } from "luxon";
+import { normalizeTimezone } from "../lib/timezones";
 import { prisma } from "../lib/prisma";
 import { reminderDispatchQueue } from "../queues/dispatcher";
 
@@ -45,12 +47,17 @@ function addDailyReminders(
   now: Date,
   channels: string[],
   mode: ReminderScheduleMode,
-  daysUntil: number
+  daysUntil: number,
+  userTimezone: string
 ) {
+  const zone = normalizeTimezone(userTimezone);
+  const deadlineDt = DateTime.fromJSDate(deadline, { zone });
+
   for (const d of dailyOffsetsForMode(mode, daysUntil)) {
-    const reminderDate = new Date(deadline);
-    reminderDate.setDate(reminderDate.getDate() - d);
-    reminderDate.setHours(9, 0, 0, 0);
+    const reminderDate = deadlineDt
+      .minus({ days: d })
+      .set({ hour: 9, minute: 0, second: 0, millisecond: 0 })
+      .toJSDate();
 
     if (reminderDate > now) {
       for (const ch of channels) {
@@ -140,7 +147,16 @@ export async function scheduleSmartRemindersForLink(
 
   const reminders: ReminderRow[] = [];
 
-  addDailyReminders(reminders, link.id, deadline, now, channelList, mode, daysUntil);
+  addDailyReminders(
+    reminders,
+    link.id,
+    deadline,
+    now,
+    channelList,
+    mode,
+    daysUntil,
+    user.timezone
+  );
   addHourlyLast24hReminders(reminders, link.id, deadline, now, channelList);
 
   const oneHourBefore = new Date(deadline.getTime() - 60 * 60 * 1000);

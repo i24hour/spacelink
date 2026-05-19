@@ -1,6 +1,8 @@
+import { DateTime } from "luxon";
 import { prisma } from "../lib/prisma";
 import { scrapeUrl } from "../lib/firecrawl";
 import { extractWithLLM } from "../lib/llm";
+import { normalizeTimezone } from "../lib/timezones";
 import { scheduleSmartRemindersForLink } from "./reminders-smart";
 import type { SavedLink } from "@deadlineai/db";
 
@@ -40,11 +42,22 @@ Return JSON only:
 `.trim();
 }
 
-function parseDeadline(value: unknown): Date | null {
+function parseDeadline(value: unknown, zoneHint: string): Date | null {
   if (typeof value !== "string" || !value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
+  const zone = normalizeTimezone(zoneHint);
+  const trimmed = value.trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const dt = DateTime.fromISO(trimmed, { zone }).endOf("day");
+    return dt.isValid ? dt.toJSDate() : null;
+  }
+
+  const dt = DateTime.fromISO(trimmed, { setZone: true });
+  if (dt.isValid) return dt.toJSDate();
+
+  const fallback = new Date(trimmed);
+  if (Number.isNaN(fallback.getTime())) return null;
+  return fallback;
 }
 
 async function readUrlContent(url: string) {
@@ -76,21 +89,29 @@ async function readUrlContent(url: string) {
   return { content, title };
 }
 
-export async function extractUrlDataWithFallback(url: string): Promise<UrlExtractionResult | null> {
+export async function extractUrlDataWithFallback(
+  url: string,
+  userTimezone?: string
+): Promise<UrlExtractionResult | null> {
   const { content, title } = await readUrlContent(url);
 
   if (!content || content.length < 50) return null;
 
   // AI extraction
   const extraction = await extractWithLLM(buildPrompt(title, content));
-  const extractedDeadline = parseDeadline(extraction.deadline);
+  const pageZone = normalizeTimezone(
+    (typeof extraction.timezone === "string" && extraction.timezone) ||
+      userTimezone ||
+      "UTC"
+  );
+  const extractedDeadline = parseDeadline(extraction.deadline, pageZone);
   const deadlineSource: DeadlineSource = extractedDeadline ? "page" : "none";
 
   return {
     title: extraction.title || title,
     rawContent: content,
     extractedDeadline,
-    timezone: extraction.timezone || null,
+    timezone: extraction.timezone ? pageZone : null,
     category: extraction.category || null,
     urgencyScore: typeof extraction.urgency_score === "number" ? extraction.urgency_score : null,
     confidenceScore: typeof extraction.confidence_score === "number" ? extraction.confidence_score : null,
@@ -109,6 +130,9 @@ export async function saveExtractedUrlData(
   data: UrlExtractionResult,
   options?: { autoScheduleReminders?: boolean }
 ): Promise<SavedLink> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const userZone = normalizeTimezone(user?.timezone || "UTC");
+
   const link = await prisma.savedLink.create({
     data: {
       userId,
@@ -116,7 +140,7 @@ export async function saveExtractedUrlData(
       title: data.title,
       rawContent: data.rawContent,
       extractedDeadline: data.extractedDeadline,
-      timezone: data.timezone,
+      timezone: data.timezone || userZone,
       category: data.category,
       urgencyScore: data.urgencyScore,
       confidenceScore: data.confidenceScore,
@@ -135,7 +159,8 @@ export async function saveExtractedUrlData(
 }
 
 export async function processExtractionFromUrl(url: string, userId: string): Promise<SavedLink | null> {
-  const extracted = await extractUrlDataWithFallback(url);
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const extracted = await extractUrlDataWithFallback(url, user?.timezone);
   if (!extracted) return null;
   return saveExtractedUrlData(url, userId, extracted);
 }
