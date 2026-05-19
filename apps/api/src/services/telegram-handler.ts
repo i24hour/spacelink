@@ -85,21 +85,11 @@ function formatDeadlineInTimezone(date: Date, timezone: string): string {
 
 type PendingDeadlineConfirmation = {
   linkId: string;
-  suggestedDeadlineIso: string | null;
-  sourceUrl?: string;
-  awaiting: "confirm" | "manual_date";
+  awaiting: "manual_date";
 };
 
 const pendingDeadlineConfirmations = new Map<string, PendingDeadlineConfirmation>();
 const lastDeadlineListByChat = new Map<string, string[]>();
-
-function isAffirmative(text: string): boolean {
-  return /^(yes|y|ok|okay|right|correct|haan|ha|sahi)$/i.test(text.trim());
-}
-
-function isNegative(text: string): boolean {
-  return /^(no|n|wrong|galat|nahi|nahin)$/i.test(text.trim());
-}
 
 function saysNoDeadline(text: string): boolean {
   const s = text.trim().toLowerCase();
@@ -344,39 +334,11 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
-  // Confirmation flow (only when deadline came from web-search fallback, not directly page content)
+  // Manual date flow when a saved link has no on-page deadline (TBD)
   if (linkedUser) {
     const pending = pendingDeadlineConfirmations.get(chatId);
     if (pending && !detectedUrl) {
-      if (pending.awaiting === "confirm") {
-        if (isAffirmative(raw)) {
-          if (pending.suggestedDeadlineIso) {
-            const suggested = new Date(pending.suggestedDeadlineIso);
-            if (!Number.isNaN(suggested.getTime())) {
-              await updateLinkDeadlineAndReschedule(pending.linkId, suggested);
-            }
-          }
-          pendingDeadlineConfirmations.delete(chatId);
-          await sendTelegramRaw(
-            chatId,
-            "✅ Great, confirmed. I saved that deadline and reminders are active.",
-            "HTML"
-          );
-          return;
-        }
-        if (isNegative(raw)) {
-          await clearLinkDeadlineAndPendingReminders(pending.linkId);
-          pending.awaiting = "manual_date";
-          pending.suggestedDeadlineIso = null;
-          pendingDeadlineConfirmations.set(chatId, pending);
-          await sendTelegramRaw(
-            chatId,
-            "Got it. I removed that suggested deadline.\n\nPlease send the correct date/time (example: 2026-06-30 11:59 PM IST), or type <b>no deadline</b>.",
-            "HTML"
-          );
-          return;
-        }
-      } else if (pending.awaiting === "manual_date") {
+      if (pending.awaiting === "manual_date") {
         if (saysNoDeadline(raw)) {
           await clearLinkDeadlineAndPendingReminders(pending.linkId);
           pendingDeadlineConfirmations.delete(chatId);
@@ -488,7 +450,6 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       if (!result.extractedDeadline) {
         pendingDeadlineConfirmations.set(chatId, {
           linkId: result.id,
-          suggestedDeadlineIso: null,
           awaiting: "manual_date",
         });
         await sendTelegramRaw(
@@ -502,23 +463,6 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       const deadline = new Date(result.extractedDeadline);
       const date = formatDeadlineInTimezone(deadline, user.timezone);
       const left = formatRelativeDeadline(deadline);
-
-      if (extracted.deadlineSource === "search") {
-        await clearLinkDeadlineAndPendingReminders(result.id);
-        pendingDeadlineConfirmations.set(chatId, {
-          linkId: result.id,
-          suggestedDeadlineIso: deadline.toISOString(),
-          sourceUrl: extracted.deadlineEvidenceUrl,
-          awaiting: "confirm",
-        });
-
-        await sendTelegramRaw(
-          chatId,
-          `✅ <b>Link tracked</b>\n\n<b>${result.title}</b>\nSuggested deadline: ${date} · ${left}${result.category ? `\n🏷 ${result.category}` : ""}\n\nI found this from latest web sources${extracted.deadlineEvidenceUrl ? ` (<a href="${extracted.deadlineEvidenceUrl}">source</a>)` : ""} because it was not explicit on the main page.\n\nReply <b>YES</b> to save this deadline, or <b>NO</b> to remove it and enter your own date.`,
-          "HTML"
-        );
-        return;
-      }
 
       await sendTelegramRaw(
         chatId,

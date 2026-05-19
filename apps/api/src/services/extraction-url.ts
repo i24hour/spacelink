@@ -1,10 +1,10 @@
 import { prisma } from "../lib/prisma";
-import { scrapeUrl, searchWeb } from "../lib/firecrawl";
+import { scrapeUrl } from "../lib/firecrawl";
 import { extractWithLLM } from "../lib/llm";
 import { scheduleSmartRemindersForLink } from "./reminders-smart";
 import type { SavedLink } from "@deadlineai/db";
 
-export type DeadlineSource = "page" | "search" | "none";
+export type DeadlineSource = "page" | "none";
 
 export type UrlExtractionResult = {
   title: string;
@@ -17,7 +17,6 @@ export type UrlExtractionResult = {
   rollingApplication: boolean;
   estimatedCompletionMinutes: number | null;
   deadlineSource: DeadlineSource;
-  deadlineEvidenceUrl?: string;
 };
 
 function buildPrompt(title: string, content: string) {
@@ -38,33 +37,6 @@ Return JSON only:
   "rolling_application": false,
   "estimated_completion_minutes": 30
 }
-`.trim();
-}
-
-function buildSearchDeadlinePrompt(title: string, content: string, sourceUrl: string, targetUrl: string) {
-  return `
-You are DeadlineAI. Find ONLY the application/event deadline date related to this target URL:
-${targetUrl}
-
-Candidate source URL:
-${sourceUrl}
-
-Page title:
-${title}
-
-Page content:
-${content.slice(0, 12000)}
-
-Return JSON only:
-{
-  "deadline": "2026-05-20T23:59:00",
-  "confidence_score": 0.0,
-  "reason": "short text"
-}
-
-Rules:
-- If no explicit or highly reliable deadline exists, set deadline to null.
-- Do not invent dates.
 `.trim();
 }
 
@@ -104,76 +76,6 @@ async function readUrlContent(url: string) {
   return { content, title };
 }
 
-async function findDeadlineViaSearch(targetUrl: string, titleHint: string) {
-  let hostname = "";
-  try {
-    hostname = new URL(targetUrl).hostname.replace(/^www\./, "");
-  } catch {
-    hostname = targetUrl;
-  }
-
-  const queryBase = titleHint && titleHint !== targetUrl ? titleHint : hostname;
-  const queries = [
-    `${queryBase} deadline`,
-    `${queryBase} last date to apply`,
-    `${hostname} application deadline`,
-  ];
-
-  const seen = new Set<string>([targetUrl]);
-  const candidates: Array<{ deadline: Date; confidence: number; evidenceUrl: string }> = [];
-
-  for (const q of queries) {
-    const results = await searchWeb(q, 5);
-    for (const result of results) {
-      const candidateUrl = result.url;
-      if (!candidateUrl || seen.has(candidateUrl)) continue;
-      seen.add(candidateUrl);
-
-      let pageTitle = result.title || candidateUrl;
-      let pageContent = "";
-
-      try {
-        const scraped = await scrapeUrl(candidateUrl);
-        pageContent = scraped.markdown || scraped.html || "";
-        pageTitle = (scraped.metadata?.title as string) || pageTitle;
-      } catch {
-        try {
-          const res = await fetch(candidateUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-          const html = await res.text();
-          pageContent = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 15000);
-          const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-          if (titleMatch) pageTitle = titleMatch[1];
-        } catch {
-          // Skip this candidate
-        }
-      }
-
-      if (!pageContent || pageContent.length < 80) continue;
-
-      const extracted = await extractWithLLM(
-        buildSearchDeadlinePrompt(pageTitle, pageContent, candidateUrl, targetUrl)
-      );
-      const deadline = parseDeadline(extracted.deadline);
-      if (!deadline) continue;
-
-      const confidence =
-        typeof extracted.confidence_score === "number" ? extracted.confidence_score : 0.4;
-      candidates.push({ deadline, confidence, evidenceUrl: candidateUrl });
-      if (confidence >= 0.8) break;
-    }
-    if (candidates.some((c) => c.confidence >= 0.8)) break;
-  }
-
-  if (!candidates.length) return null;
-
-  candidates.sort((a, b) => {
-    if (b.confidence !== a.confidence) return b.confidence - a.confidence;
-    return a.deadline.getTime() - b.deadline.getTime();
-  });
-
-  return candidates[0];
-}
-
 export async function extractUrlDataWithFallback(url: string): Promise<UrlExtractionResult | null> {
   const { content, title } = await readUrlContent(url);
 
@@ -181,20 +83,8 @@ export async function extractUrlDataWithFallback(url: string): Promise<UrlExtrac
 
   // AI extraction
   const extraction = await extractWithLLM(buildPrompt(title, content));
-  const pageDeadline = parseDeadline(extraction.deadline);
-
-  let extractedDeadline = pageDeadline;
-  let deadlineSource: DeadlineSource = pageDeadline ? "page" : "none";
-  let deadlineEvidenceUrl: string | undefined;
-
-  if (!extractedDeadline) {
-    const fromSearch = await findDeadlineViaSearch(url, extraction.title || title);
-    if (fromSearch?.deadline) {
-      extractedDeadline = fromSearch.deadline;
-      deadlineSource = "search";
-      deadlineEvidenceUrl = fromSearch.evidenceUrl;
-    }
-  }
+  const extractedDeadline = parseDeadline(extraction.deadline);
+  const deadlineSource: DeadlineSource = extractedDeadline ? "page" : "none";
 
   return {
     title: extraction.title || title,
@@ -210,7 +100,6 @@ export async function extractUrlDataWithFallback(url: string): Promise<UrlExtrac
         ? extraction.estimated_completion_minutes
         : null,
     deadlineSource,
-    deadlineEvidenceUrl,
   };
 }
 
@@ -219,11 +108,6 @@ export async function saveExtractedUrlData(
   userId: string,
   data: UrlExtractionResult
 ): Promise<SavedLink> {
-  const metadata: Record<string, unknown> = {
-    deadline_source: data.deadlineSource,
-  };
-  if (data.deadlineEvidenceUrl) metadata.deadline_evidence_url = data.deadlineEvidenceUrl;
-
   const link = await prisma.savedLink.create({
     data: {
       userId,
@@ -237,7 +121,7 @@ export async function saveExtractedUrlData(
       confidenceScore: data.confidenceScore,
       rollingApplication: data.rollingApplication,
       estimatedCompletionMinutes: data.estimatedCompletionMinutes,
-      metadata: metadata as any,
+      metadata: { deadline_source: data.deadlineSource } as any,
       status: "active",
     },
   });
