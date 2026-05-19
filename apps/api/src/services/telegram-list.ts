@@ -55,7 +55,10 @@ export function buildTrackedLinksListMessage(
   timezone: string
 ): string {
   if (links.length === 0) {
-    return "📭 <b>No tracked links yet</b>\n\nPaste a URL here or save from the browser extension.";
+    return (
+      "📭 <b>No upcoming links</b>\n\n" +
+      "Nothing active with a future deadline (or no deadline set). Paste a new URL to track."
+    );
   }
 
   const blocks = links.map((link, i) => {
@@ -108,8 +111,13 @@ export function buildDeleteKeyboard(linkCount: number): InlineKeyboard {
 }
 
 export async function fetchTrackedLinks(userId: string, limit = 20) {
+  const now = new Date();
   return prisma.savedLink.findMany({
-    where: { userId, status: { in: ["active", "pending"] } },
+    where: {
+      userId,
+      status: { in: ["active", "pending"] },
+      OR: [{ extractedDeadline: null }, { extractedDeadline: { gt: now } }],
+    },
     orderBy: [{ extractedDeadline: "asc" }, { createdAt: "desc" }],
     take: limit,
   });
