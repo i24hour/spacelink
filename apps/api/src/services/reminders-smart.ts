@@ -157,7 +157,9 @@ export async function scheduleSmartRemindersForLink(
     user.preferredChannels.length ? user.preferredChannels : ["telegram"]
   );
   if (user.telegramId) channels.add("telegram");
-  const channelList = [...channels];
+  // Email reminders paused — Telegram only for now.
+  channels.delete("email");
+  const channelList = channels.size > 0 ? [...channels] : ["telegram"];
 
   const dailyRows: ReminderRow[] = [];
   const hourlyRows: ReminderRow[] = [];

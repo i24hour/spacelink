@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { generateReminderMessage } from "./ai-message";
-import { sendEmail } from "./notifications/email";
+// import { sendEmail } from "./notifications/email";
 import { sendTelegramRaw } from "./notifications/telegram";
 import { sendWhatsApp } from "./notifications/whatsapp";
 
@@ -28,9 +28,19 @@ export async function dispatchDueReminder(reminderId: string) {
     error: "Unknown channel",
   };
 
+  // Email reminders paused — Telegram only for now.
   if (reminder.channel === "email") {
-    result = await sendEmail(user.email, `Deadline reminder: ${link.title}`, payload.text);
-  } else if (reminder.channel === "telegram" && user.telegramId) {
+    await prisma.reminder.update({
+      where: { id: reminderId },
+      data: { sentStatus: "failed", aiMessage: "Email reminders disabled temporarily" },
+    });
+    return { skipped: true as const, channel: "email" };
+  }
+
+  // if (reminder.channel === "email") {
+  //   result = await sendEmail(user.email, `Deadline reminder: ${link.title}`, payload.text);
+  // } else
+  if (reminder.channel === "telegram" && user.telegramId) {
     result = await sendTelegramRaw(user.telegramId, payload.html, "HTML");
   } else if (reminder.channel === "whatsapp" && user.whatsappNumber) {
     result = await sendWhatsApp(user.whatsappNumber, payload.text);
