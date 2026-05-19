@@ -3,7 +3,11 @@ import { prisma } from "../lib/prisma";
 import { litellm, extractWithLLM } from "../lib/llm";
 import { scrapeUrl } from "../lib/firecrawl";
 import { processExtractionFromUrl } from "./extraction-url";
-import { parseDateFromUserText } from "./deadline-parse";
+import {
+  formatCountdownHuman,
+  formatDeadlineDisplay,
+  parseDateFromUserText,
+} from "./deadline-parse";
 import { findLinkForQuery } from "./link-search";
 import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
 
@@ -170,12 +174,18 @@ async function setManualDeadline(user: User, query: string, deadlineText: string
     await scheduleSmartRemindersForLink(updated as SavedLink);
   }
 
+  const deadlineDisplay = formatDeadlineDisplay(parsed, user.timezone);
+  const countdown = formatCountdownHuman(parsed);
+  const isPast = countdown === "passed";
+
   return {
     ok: true,
     title: updated.title,
     url: updated.url,
     deadlineIso: parsed.toISOString(),
-    deadlineDisplay: formatDeadlineDate(parsed, user.timezone),
+    deadlineDisplay,
+    countdown,
+    isPast,
     linkId: updated.id,
     needsReminderPick: !hasSchedule,
     message: hasSchedule
@@ -464,7 +474,8 @@ export async function runTelegramAssistant(
         "Always use tools to read or change data. Never claim you can only use crawled page data. " +
         "When the user sets or changes a deadline with a date they provide, call set_manual_deadline (query = title keywords, deadline_text = their date). " +
         "Only call refresh_link_data when they explicitly ask to re-crawl or refresh from the website — not when they give a manual date. " +
-        "When showing countdown, use: Xd Yh Zm Ws left (total Nm Ss). No markdown tables. " +
+        "When showing countdown, use ONLY the countdown field from tool results — never invent times. " +
+        "If isPast is true, say the deadline has already passed. No markdown tables. " +
         "For listing links, tell them to use /list (interactive buttons). " +
         "For delete, use delete_link or suggest /list delete buttons. " +
         "Keep replies short (2-4 lines) in HTML-friendly plain text (no <tags> unless simple <b>).",
