@@ -8,6 +8,7 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "studio": "prisma studio",
+    "db:push:direct": "node scripts/db-push-direct.mjs",
     "build": "tsc"
   },
   "dependencies": {
