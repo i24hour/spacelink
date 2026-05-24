@@ -3,7 +3,8 @@ import { prisma } from "../lib/prisma";
 import { scrapeUrl } from "../lib/firecrawl";
 import { extractWithLLM } from "../lib/llm";
 import { normalizeTimezone } from "../lib/timezones";
-import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
+import { clearPendingRemindersForLink } from "./reminders-smart";
+import { rebuildRemindersForLink } from "./reminder-engine";
 import type { SavedLink } from "@deadlineai/db";
 
 export type DeadlineSource = "page" | "none";
@@ -190,7 +191,7 @@ export async function saveExtractedUrlData(
   });
 
   if (options?.autoScheduleReminders && link.extractedDeadline) {
-    await scheduleSmartRemindersForLink(link);
+    await rebuildRemindersForLink(link.id, "daily_all");
   }
 
   return link;

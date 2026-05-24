@@ -10,7 +10,9 @@ import {
 } from "./deadline-parse";
 import { findLinkForQuery } from "./link-search";
 import { normalizeTimezone } from "../lib/timezones";
-import { clearPendingRemindersForLink, scheduleSmartRemindersForLink } from "./reminders-smart";
+import { clearPendingRemindersForLink } from "./reminders-smart";
+import { rebuildRemindersForLink, setUserDailyReminderHour } from "./reminder-engine";
+import { parseDailyReminderHour } from "../lib/daily-reminder-time";
 
 export type TelegramAssistantReply = {
   text: string;
@@ -168,16 +170,16 @@ async function setManualDeadline(user: User, query: string, deadlineText: string
     },
   });
 
-  const meta = (updated.metadata || {}) as Record<string, unknown>;
-  const hasSchedule = Boolean(meta.reminder_schedule);
-
-  if (hasSchedule) {
-    await scheduleSmartRemindersForLink(updated as SavedLink);
-  }
+  const schedule = await rebuildRemindersForLink(updated.id, "daily_all");
 
   const deadlineDisplay = formatDeadlineDisplay(parsed, user.timezone);
   const countdown = formatCountdownHuman(parsed);
   const isPast = countdown === "passed";
+
+  const scheduleNote =
+    "error" in schedule
+      ? `Reminders: ${schedule.error}`
+      : `${schedule.total} reminders scheduled (Telegram).`;
 
   return {
     ok: true,
@@ -188,10 +190,10 @@ async function setManualDeadline(user: User, query: string, deadlineText: string
     countdown,
     isPast,
     linkId: updated.id,
-    needsReminderPick: !hasSchedule,
-    message: hasSchedule
-      ? "Deadline saved and reminders rescheduled."
-      : "Deadline saved. User should pick a reminder schedule next.",
+    needsReminderPick: false,
+    message: isPast
+      ? "Deadline saved but it has already passed — no reminders scheduled."
+      : `Deadline saved. ${scheduleNote}`,
   };
 }
 
@@ -276,9 +278,8 @@ async function refreshExistingLink(user: User, link: SavedLink): Promise<SavedLi
   });
 
   await clearPendingRemindersForLink(link.id);
-  const meta = (updated.metadata || {}) as Record<string, unknown>;
-  if (meta.reminder_schedule) {
-    await scheduleSmartRemindersForLink(updated as SavedLink);
+  if (updated.extractedDeadline && updated.extractedDeadline.getTime() > Date.now()) {
+    await rebuildRemindersForLink(updated.id);
   }
 
   return updated as SavedLink;
@@ -360,6 +361,16 @@ async function executeTool(user: User, name: string, args: Record<string, unknow
     const query = typeof args.query === "string" ? args.query : "";
     if (!query) return { ok: false, message: "Missing query." };
     return await clearManualDeadline(user, query);
+  }
+
+  if (name === "set_daily_reminder_hour") {
+    const text = typeof args.time_text === "string" ? args.time_text : "";
+    const hour = parseDailyReminderHour(text) ?? parseDailyReminderHour(String(args.hour ?? ""));
+    if (hour === null) {
+      return { ok: false, message: 'Say a time like "8 am" or "remind me at 9 PM".' };
+    }
+    await setUserDailyReminderHour(user.id, hour);
+    return { ok: true, hour, message: `Daily reminders will use ${hour}:00 (24h) in your timezone.` };
   }
 
   return { ok: false, message: `Unknown tool: ${name}` };
@@ -465,6 +476,24 @@ export async function runTelegramAssistant(
             query: { type: "string" },
           },
           required: ["query"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "set_daily_reminder_hour",
+        description:
+          "Change the user's default daily reminder clock time (default 9 AM in their timezone). Use when they ask to remind at 8am, change morning reminder time, etc.",
+        parameters: {
+          type: "object",
+          properties: {
+            time_text: {
+              type: "string",
+              description: "Time phrase from user, e.g. 8 am, 9 PM",
+            },
+          },
+          required: ["time_text"],
         },
       },
     },

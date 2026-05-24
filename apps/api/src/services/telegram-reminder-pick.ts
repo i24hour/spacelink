@@ -1,20 +1,19 @@
 import type { SavedLink, User } from "@deadlineai/db";
 import { prisma } from "../lib/prisma";
+import { REMINDER_SCHEDULE_LABELS, type ReminderScheduleMode } from "./reminders-smart";
 import {
-  REMINDER_SCHEDULE_LABELS,
-  type ReminderScheduleMode,
-  clearPendingRemindersForLink,
-  persistReminderSchedule,
-  scheduleSmartRemindersForLink,
-} from "./reminders-smart";
+  formatNextReminderLine,
+  formatScheduleConfirmation,
+  getNextPendingReminder,
+  rebuildRemindersForLink,
+} from "./reminder-engine";
 import {
   editTelegramMessage,
   sendTelegramMessage,
   type InlineKeyboard,
 } from "./notifications/telegram";
 
-/** Prevents parallel callback taps from stacking duplicate reminder rows. */
-const scheduleLocks = new Map<string, Promise<{ ok: boolean; alreadySet?: boolean; message: string }>>();
+const scheduleLocks = new Map<string, Promise<{ ok: boolean; alreadySet?: boolean; silent?: boolean; message: string }>>();
 
 function escapeHtml(text: string): string {
   return text
@@ -43,7 +42,7 @@ function formatDeadlineInTimezone(date: Date, timezone: string): string {
 export function buildReminderScheduleKeyboard(linkId: string): InlineKeyboard {
   return {
     inline_keyboard: [
-      [{ text: "📅 Daily reminders", callback_data: `rem:all:${linkId}` }],
+      [{ text: "📅 Daily · all days", callback_data: `rem:all:${linkId}` }],
       [{ text: "📅 Daily · last 10 days", callback_data: `rem:10d:${linkId}` }],
       [{ text: "📅 Daily · last 5 days", callback_data: `rem:5d:${linkId}` }],
     ],
@@ -60,7 +59,8 @@ export function parseReminderScheduleCallback(
   return { mode, linkId: m[2] };
 }
 
-export async function sendReminderSchedulePrompt(
+/** Auto-schedule default reminders when a deadline is saved (no button required). */
+export async function activateRemindersForLink(
   chatId: string,
   link: SavedLink,
   user: User,
@@ -70,31 +70,27 @@ export async function sendReminderSchedulePrompt(
   if (!deadline) return;
 
   const dateStr = formatDeadlineInTimezone(deadline, user.timezone);
-  const msLeft = deadline.getTime() - Date.now();
-  const hoursLeft = Math.max(0, Math.floor(msLeft / (1000 * 60 * 60)));
-  const inFinalDay = msLeft > 0 && msLeft <= 24 * 60 * 60 * 1000;
-
   const category = extra?.category ?? link.category;
   const est = extra?.estimatedMinutes ?? link.estimatedCompletionMinutes;
 
+  const summary = await rebuildRemindersForLink(link.id, "daily_all");
+
   let text =
-    `✅ <b>Deadline found!</b>\n\n` +
+    `✅ <b>Deadline saved</b>\n\n` +
     `<b>${escapeHtml(link.title)}</b>\n` +
     `📅 ${escapeHtml(dateStr)}`;
-
   if (category) text += `\n🏷 ${escapeHtml(category)}`;
   if (est) text += `\n⏱ ~${est} min to complete`;
 
-  text +=
-    `\n\n<b>Choose reminder style:</b>\n` +
-    `1️⃣ Daily — every day until deadline\n` +
-    `2️⃣ Daily — only in the last <b>10 days</b>\n` +
-    `3️⃣ Daily — only in the last <b>5 days</b>\n\n` +
-    `⏰ <i>All options include hourly alerts in the final 24 hours.</i>`;
-
-  if (inFinalDay) {
-    text += `\n\n⚡ <b>Less than 24h left</b> — hourly reminders will start right away (${hoursLeft}h remaining).`;
+  if ("error" in summary) {
+    text += `\n\n⚠️ ${escapeHtml(summary.error)}`;
+    await sendTelegramMessage(chatId, text, { parseMode: "HTML" });
+    return;
   }
+
+  text = `${text}\n\n${formatScheduleConfirmation(user, link, summary)}`;
+  const next = await getNextPendingReminder(user.id);
+  text += `\n${formatNextReminderLine(user, next)}`;
 
   await sendTelegramMessage(chatId, text, {
     parseMode: "HTML",
@@ -102,105 +98,53 @@ export async function sendReminderSchedulePrompt(
   });
 }
 
+export type ReminderScheduleChoiceResult = {
+  ok: boolean;
+  message: string;
+  silent?: boolean;
+  alreadySet?: boolean;
+};
+
 export async function applyReminderScheduleChoice(
   chatId: string,
   userId: string,
   linkId: string,
   mode: ReminderScheduleMode,
   options?: { promptMessageId?: number }
-) {
+): Promise<ReminderScheduleChoiceResult> {
   const lockKey = `${linkId}:${mode}`;
-  const inFlight = scheduleLocks.get(lockKey);
-  if (inFlight) {
-    return {
-      ok: true as const,
-      alreadySet: true as const,
-      silent: true as const,
-      message: "",
-    };
+  if (scheduleLocks.has(lockKey)) {
+    return { ok: true as const, alreadySet: true as const, silent: true as const, message: "" };
   }
 
-  const run = async (): Promise<{
-    ok: boolean;
-    alreadySet?: boolean;
-    silent?: boolean;
-    message: string;
-  }> => {
-  const link = await prisma.savedLink.findFirst({
-    where: { id: linkId, userId },
-  });
-  if (!link || !link.extractedDeadline) {
-    return { ok: false, message: "Link not found or has no deadline." };
-  }
-
-  const meta = (link.metadata || {}) as Record<string, unknown>;
-  if (meta.reminder_schedule === mode) {
-    const existing = await prisma.reminder.count({
-      where: { savedLinkId: linkId, sentStatus: "pending" },
+  const run = async () => {
+    const link = await prisma.savedLink.findFirst({
+      where: { id: linkId, userId },
+      include: { user: true },
     });
-    if (existing > 0) {
-      return {
-        ok: true,
-        alreadySet: true,
-        silent: true,
-        message: "",
-      };
+    if (!link || !link.extractedDeadline) {
+      return { ok: false, message: "Link not found or has no deadline." };
     }
-  }
 
-  await clearPendingRemindersForLink(linkId);
-  await persistReminderSchedule(linkId, mode);
-
-  const updated = await prisma.savedLink.findUnique({ where: { id: linkId } });
-  if (!updated) return { ok: false, message: "Could not update link." };
-
-  const result = await scheduleSmartRemindersForLink(updated, mode);
-  const label = REMINDER_SCHEDULE_LABELS[mode];
-
-  const msLeft = new Date(link.extractedDeadline).getTime() - Date.now();
-  const hourlyNote =
-    msLeft <= 24 * 60 * 60 * 1000
-      ? "\n⏰ Hourly alerts every hour until the deadline."
-      : "\n⏰ Hourly alerts start in the final 24 hours before the deadline.";
-
-  let scheduleLine = "";
-  if (result && result.total > 0) {
-    const ch = result.channels.join(" + ");
-    const dailyN = result.daily / Math.max(1, result.channels.length);
-    const hourlyN = result.hourly / Math.max(1, result.channels.length);
-    if (dailyN === 0 && hourlyN > 0) {
-      scheduleLine =
-        `\n\n📬 <b>Scheduled:</b> no 9 AM daily left (deadline too soon) — ` +
-        `~${hourlyN} hourly pings on the hour (6 PM, 7 PM, …) until deadline · via ${escapeHtml(ch)}`;
-    } else {
-      scheduleLine =
-        `\n\n📬 <b>Scheduled:</b> ${dailyN} daily ping${dailyN === 1 ? "" : "s"}` +
-        (hourlyN > 0 ? `, then ~${hourlyN} hourly on the hour near the end` : "") +
-        ` · via ${escapeHtml(ch)}`;
+    const summary = await rebuildRemindersForLink(linkId, mode);
+    if ("error" in summary) {
+      return { ok: false, message: summary.error };
     }
-    if (result.channels.length > 1) {
-      scheduleLine +=
-        `\n<i>Using email and Telegram — turn one off in web Settings if you want fewer pings.</i>`;
+
+    const user = link.user;
+    let confirmText =
+      formatScheduleConfirmation(user, link, summary) +
+      `\n📋 ${escapeHtml(REMINDER_SCHEDULE_LABELS[mode])}`;
+    const next = await getNextPendingReminder(userId);
+    confirmText += `\n${formatNextReminderLine(user, next)}`;
+
+    if (options?.promptMessageId) {
+      await editTelegramMessage(chatId, options.promptMessageId, confirmText, {
+        parseMode: "HTML",
+      }).catch(() => {});
     }
-  }
 
-  const confirmText =
-      `✅ <b>Reminders set</b>\n\n` +
-      `<b>${escapeHtml(link.title)}</b>\n` +
-      `📋 ${escapeHtml(label)}` +
-      hourlyNote +
-      scheduleLine;
-
-  if (options?.promptMessageId) {
-    await editTelegramMessage(chatId, options.promptMessageId, confirmText, {
-      parseMode: "HTML",
-    }).catch(() => {});
-  }
-
-  return {
-    ok: true,
-    message: options?.promptMessageId ? "" : confirmText,
-  };
+    return { ok: true, message: options?.promptMessageId ? "" : confirmText };
   };
 
   const promise = run();

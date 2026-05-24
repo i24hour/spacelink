@@ -47,15 +47,17 @@ function addDailyReminders(
   channels: string[],
   mode: ReminderScheduleMode,
   daysUntil: number,
-  userTimezone: string
+  userTimezone: string,
+  dailyReminderHour: number
 ) {
   const zone = normalizeTimezone(userTimezone);
   const deadlineDt = DateTime.fromJSDate(deadline, { zone });
+  const hour = Math.min(23, Math.max(0, dailyReminderHour));
 
   for (const d of dailyOffsetsForMode(mode, daysUntil)) {
     const reminderDate = deadlineDt
       .minus({ days: d })
-      .set({ hour: 9, minute: 0, second: 0, millisecond: 0 })
+      .set({ hour, minute: 0, second: 0, millisecond: 0 })
       .toJSDate();
 
     if (reminderDate > now) {
@@ -173,7 +175,8 @@ export async function scheduleSmartRemindersForLink(
     channelList,
     mode,
     daysUntil,
-    user.timezone
+    user.timezone,
+    user.dailyReminderHour ?? 9
   );
   addHourlyLast24hReminders(
     hourlyRows,

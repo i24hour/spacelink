@@ -1,7 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { extractWithLLM } from "../lib/llm";
 import { scrapeUrl } from "../lib/firecrawl";
-import { scheduleRemindersForLink } from "./reminders";
+import { rebuildRemindersForLink } from "./reminder-engine";
 
 function buildPrompt(title: string, content: string, metadata?: Record<string, unknown>) {
   return `
@@ -76,7 +76,9 @@ export async function processExtraction(savedLinkId: string) {
     },
   });
 
-  await scheduleRemindersForLink(updated);
+  if (updated.extractedDeadline && updated.extractedDeadline.getTime() > Date.now()) {
+    await rebuildRemindersForLink(updated.id, "daily_all");
+  }
 
   return updated;
 }

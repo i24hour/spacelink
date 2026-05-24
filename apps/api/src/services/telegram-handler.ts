@@ -15,9 +15,15 @@ import {
 } from "./extraction-url";
 import {
   applyReminderScheduleChoice,
+  activateRemindersForLink,
   parseReminderScheduleCallback,
-  sendReminderSchedulePrompt,
 } from "./telegram-reminder-pick";
+import { parseDailyReminderHour, formatDailyReminderHour } from "../lib/daily-reminder-time";
+import {
+  formatNextReminderLine,
+  getNextPendingReminder,
+  setUserDailyReminderHour,
+} from "./reminder-engine";
 import { runTelegramAssistant } from "./telegram-assistant";
 import {
   lastDeadlineListByChat,
@@ -382,12 +388,15 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/status") {
     if (linkedUser) {
       const nowStr = formatNowInTimezone(linkedUser.timezone);
+      const dailyAt = formatDailyReminderHour(linkedUser.dailyReminderHour ?? 9, linkedUser.timezone);
+      const next = await getNextPendingReminder(linkedUser.id);
       const tzLine = needsTimezoneSetup(linkedUser)
         ? "⚠️ <b>Timezone not set</b> — tap /timezone to choose IST, PT, PST, etc."
-        : `🌍 Timezone: <b>${timezoneLabel(linkedUser.timezone)}</b>\n🕐 Now: <b>${nowStr}</b>`;
+        : `🌍 Timezone: <b>${timezoneLabel(linkedUser.timezone)}</b>\n🕐 Now: <b>${nowStr}</b>\n🔔 Daily reminder time: <b>${dailyAt}</b>`;
+      const nextLine = formatNextReminderLine(linkedUser, next);
       await sendTelegramRaw(
         chatId,
-        `✅ <b>Connected</b>\n\nLogged in as: <code>${linkedUser.email}</code>\n\n${tzLine}\n\nPaste any link to track deadlines.`,
+        `✅ <b>Connected</b>\n\nLogged in as: <code>${linkedUser.email}</code>\n\n${tzLine}\n${nextLine}\n\nPaste any link to track deadlines.`,
         "HTML"
       );
       return;
@@ -451,6 +460,21 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
+  // Change daily reminder hour via text (default 9 AM in user timezone)
+  if (linkedUser) {
+    const hour = parseDailyReminderHour(raw);
+    if (hour !== null && /remind/i.test(raw)) {
+      await setUserDailyReminderHour(linkedUser.id, hour);
+      const label = formatDailyReminderHour(hour, linkedUser.timezone);
+      await sendTelegramRaw(
+        chatId,
+        `✅ <b>Daily reminder time updated</b>\n\nAll active links will ping at <b>${label}</b> (${linkedUser.timezone}).\n\nCheck /status for the next scheduled ping.`,
+        "HTML"
+      );
+      return;
+    }
+  }
+
   // Manual date flow when a saved link has no on-page deadline (TBD)
   if (linkedUser) {
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
@@ -469,7 +493,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         if (parsed) {
           const updated = await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
           pendingDeadlineConfirmations.delete(chatId);
-          await sendReminderSchedulePrompt(chatId, updated, linkedUser);
+          await activateRemindersForLink(chatId, updated, linkedUser);
           return;
         }
 
@@ -620,12 +644,12 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       if (restarting) {
         await sendTelegramRaw(
           chatId,
-          `♻️ <b>Link refreshed</b> — deadline is still upcoming. Pick reminders below.`,
+          `♻️ <b>Link refreshed</b> — deadline is still upcoming.`,
           "HTML"
         );
       }
 
-      await sendReminderSchedulePrompt(chatId, result, user, {
+      await activateRemindersForLink(chatId, result, user, {
         category: result.category,
         estimatedMinutes: result.estimatedCompletionMinutes,
       });
@@ -664,7 +688,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
             where: { id: reply.reminderPickLinkId },
           });
           if (link?.extractedDeadline) {
-            await sendReminderSchedulePrompt(chatId, link, linkedUser);
+            await activateRemindersForLink(chatId, link, linkedUser);
           }
         }
         return;

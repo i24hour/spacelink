@@ -15,6 +15,7 @@ model User {
   preferredChannels String[] @default(["email"]) @map("preferred_channels")
   timezone            String   @default("UTC")
   timezoneConfigured  Boolean  @default(false) @map("timezone_configured")
+  dailyReminderHour   Int      @default(9) @map("daily_reminder_hour")
   plan                String   @default("free")
   createdAt         DateTime @default(now()) @map("created_at")
   updatedAt         DateTime @updatedAt @map("updated_at")
