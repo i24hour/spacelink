@@ -35,6 +35,7 @@ import {
   parseTimezoneCallback,
   sendTimezoneSetupPrompt,
 } from "./telegram-timezone-pick";
+import { handleTelegramImage } from "./telegram-image-handler";
 
 // Detect if text contains a URL (with or without protocol)
 function extractUrl(text: string): string | null {
@@ -703,4 +704,51 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     `I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href="${await connectThisChatUrl()}">Sign in with Google and connect this chat</a>\n👉 Use <b>/status</b> to check connection\n👉 Use <b>/help</b> for all commands`,
     "HTML"
   );
+}
+
+export type TelegramIncomingImage = {
+  fileId: string;
+  messageId: number;
+  caption?: string;
+  mimeType?: string;
+};
+
+export async function handleTelegramImageMessage(
+  chatId: string,
+  input: TelegramIncomingImage
+) {
+  const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
+  const webAppUrl = process.env.WEB_APP_URL || "https://web-i24hours-projects.vercel.app";
+
+  async function connectThisChatUrl(): Promise<string> {
+    const { createTelegramChatLinkToken } = await import("../lib/auth.js");
+    const token = createTelegramChatLinkToken(chatId);
+    return `${webAppUrl}/auth?tgLink=${encodeURIComponent(token)}`;
+  }
+
+  const caption = input.caption?.trim() || "";
+  if (caption && extractUrl(caption)) {
+    await handleTelegramMessage(chatId, caption);
+    return;
+  }
+
+  if (!linkedUser) {
+    await sendTelegramRaw(
+      chatId,
+      `🔐 <b>Please sign in first</b>\n\n<a href="${await connectThisChatUrl()}">👉 Sign in with Google and connect this Telegram chat</a>\n\nThen send your screenshot or poster here!`,
+      "HTML"
+    );
+    return;
+  }
+
+  if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
+
+  await handleTelegramImage(chatId, linkedUser, input, {
+    onManualDateNeeded: (linkId) => {
+      pendingDeadlineConfirmations.set(chatId, {
+        linkId,
+        awaiting: "manual_date",
+      });
+    },
+  });
 }

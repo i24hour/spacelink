@@ -7,7 +7,7 @@ import { clearPendingRemindersForLink } from "./reminders-smart";
 import { rebuildRemindersForLink } from "./reminder-engine";
 import type { SavedLink } from "@deadlineai/db";
 
-export type DeadlineSource = "page" | "none";
+export type DeadlineSource = "page" | "image" | "none";
 
 export type UrlExtractionResult = {
   title: string;
@@ -20,6 +20,7 @@ export type UrlExtractionResult = {
   rollingApplication: boolean;
   estimatedCompletionMinutes: number | null;
   deadlineSource: DeadlineSource;
+  sourceUrl?: string | null;
 };
 
 function buildPrompt(title: string, content: string) {
@@ -43,7 +44,7 @@ Return JSON only:
 `.trim();
 }
 
-function parseDeadline(value: unknown, zoneHint: string): Date | null {
+export function parseDeadline(value: unknown, zoneHint: string): Date | null {
   if (typeof value !== "string" || !value) return null;
   const zone = normalizeTimezone(zoneHint);
   const trimmed = value.trim();

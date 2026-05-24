@@ -1,8 +1,32 @@
 import { Router } from "express";
-import { handleTelegramCallback, handleTelegramMessage } from "../services/telegram-handler";
+import {
+  handleTelegramCallback,
+  handleTelegramImageMessage,
+  handleTelegramMessage,
+} from "../services/telegram-handler";
 import { sendTelegramRaw, setTelegramWebhook } from "../services/notifications/telegram";
 
 const router = Router();
+
+type TelegramPhotoSize = { file_id: string };
+type TelegramDocument = { file_id: string; mime_type?: string };
+
+function pickTelegramImage(message: {
+  photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
+}): { fileId: string; mimeType?: string } | null {
+  if (message.photo?.length) {
+    const largest = message.photo[message.photo.length - 1];
+    return { fileId: largest.file_id, mimeType: "image/jpeg" };
+  }
+
+  const doc = message.document;
+  if (doc?.mime_type?.startsWith("image/")) {
+    return { fileId: doc.file_id, mimeType: doc.mime_type };
+  }
+
+  return null;
+}
 
 router.post("/", async (req, res) => {
   const update = req.body;
@@ -28,7 +52,20 @@ router.post("/", async (req, res) => {
 
     if (!chatId) return res.sendStatus(200);
 
-    await handleTelegramMessage(String(chatId), text);
+    const image = pickTelegramImage(msg);
+    if (image) {
+      await handleTelegramImageMessage(String(chatId), {
+        fileId: image.fileId,
+        messageId: msg.message_id,
+        caption: msg.caption || undefined,
+        mimeType: image.mimeType,
+      });
+      return res.sendStatus(200);
+    }
+
+    if (text) {
+      await handleTelegramMessage(String(chatId), text);
+    }
     return res.sendStatus(200);
   } catch (err) {
     console.error("Telegram webhook error:", err);

@@ -110,3 +110,40 @@ export async function deleteTelegramWebhook() {
   );
   return res.json();
 }
+
+export async function downloadTelegramFile(
+  fileId: string
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  if (!TELEGRAM_BOT_TOKEN) return null;
+
+  try {
+    const fileMeta = await telegramApi<{
+      ok?: boolean;
+      result?: { file_path?: string };
+    }>("getFile", { file_id: fileId });
+
+    const filePath = fileMeta.result?.file_path;
+    if (!fileMeta.ok || !filePath) return null;
+
+    const res = await fetch(
+      `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`
+    );
+    if (!res.ok) return null;
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    const ext = filePath.split(".").pop()?.toLowerCase();
+    const mimeType =
+      ext === "png"
+        ? "image/png"
+        : ext === "webp"
+          ? "image/webp"
+          : ext === "gif"
+            ? "image/gif"
+            : "image/jpeg";
+
+    return { buffer, mimeType };
+  } catch (err) {
+    console.error("downloadTelegramFile failed:", err);
+    return null;
+  }
+}
