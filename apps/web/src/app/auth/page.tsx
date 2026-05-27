@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
@@ -8,6 +8,8 @@ const REDIRECT_URI = typeof window !== "undefined" ? `${window.location.origin}/
 
 export default function AuthPage() {
   const handled = useRef(false);
+  const [status, setStatus] = useState<"idle" | "authenticating" | "connected_telegram" | "error">("idle");
+  const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
     if (handled.current) return;
@@ -47,13 +49,19 @@ export default function AuthPage() {
 
     // Check if there was an error
     const error = params.get("error");
-    if (error && window.opener) {
-      window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ERROR", error }, "*");
-      window.close();
+    if (error) {
+      if (window.opener) {
+        window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ERROR", error }, "*");
+        window.close();
+      } else {
+        setStatus("error");
+        setErrorMsg(error);
+      }
     }
   }, []);
 
   async function connectTelegramWithExistingSession(token: string, telegramLinkToken: string) {
+    setStatus("authenticating");
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
     try {
       await fetch(`${apiUrl}/api/auth/telegram-connect`, {
@@ -65,13 +73,15 @@ export default function AuthPage() {
         body: JSON.stringify({ token: telegramLinkToken }),
       });
       sessionStorage.removeItem("deadlineai_tg_link");
-      window.location.href = "/dashboard";
+      setStatus("connected_telegram");
     } catch (e) {
       console.error(e);
+      window.location.href = "/dashboard";
     }
   }
 
   async function exchangeToken(idToken: string, telegramLinkToken?: string) {
+    setStatus("authenticating");
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
     try {
       const res = await fetch(`${apiUrl}/api/auth/google`, {
@@ -84,21 +94,32 @@ export default function AuthPage() {
         localStorage.setItem("deadlineai_token", data.token);
 
         if (telegramLinkToken) {
-          await fetch(`${apiUrl}/api/auth/telegram-connect`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${data.token}`,
-            },
-            body: JSON.stringify({ token: telegramLinkToken }),
-          }).catch(() => null);
-          sessionStorage.removeItem("deadlineai_tg_link");
+          try {
+            await fetch(`${apiUrl}/api/auth/telegram-connect`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${data.token}`,
+              },
+              body: JSON.stringify({ token: telegramLinkToken }),
+            });
+            sessionStorage.removeItem("deadlineai_tg_link");
+            setStatus("connected_telegram");
+            return;
+          } catch (e) {
+            console.error(e);
+          }
         }
 
         window.location.href = "/dashboard";
+      } else {
+        setStatus("error");
+        setErrorMsg(data.error || "Authentication failed");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
+      setStatus("error");
+      setErrorMsg(e.message || "Authentication error");
     }
   }
 
@@ -120,11 +141,61 @@ export default function AuthPage() {
     window.location.href = url;
   }
 
+  const botName = process.env.NEXT_PUBLIC_TELEGRAM_BOT_NAME || "DeadlineAIBot";
+
+  if (status === "authenticating") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 text-center">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">DeadlineAI</h1>
+          <p className="mt-2 text-muted-foreground animate-pulse">Authenticating, please wait...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === "connected_telegram") {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 text-center">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-primary">🎉 Account Linked!</h1>
+          <p className="mt-2 text-muted-foreground">
+            Your Google Account is now connected to the Telegram Bot.
+          </p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-4 w-full max-w-xs">
+          <Button
+            size="lg"
+            onClick={() => {
+              window.location.href = "/dashboard";
+            }}
+            className="w-full"
+          >
+            Go to Dashboard
+          </Button>
+          <Button
+            size="lg"
+            variant="outline"
+            onClick={() => {
+              window.location.href = `https://t.me/${botName}`;
+            }}
+            className="w-full"
+          >
+            Go to Telegram
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-4 text-center">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">DeadlineAI</h1>
         <p className="mt-2 text-muted-foreground">Sign in to save deadlines from any page.</p>
+        {status === "error" && (
+          <p className="mt-2 text-sm text-destructive">{errorMsg}</p>
+        )}
       </div>
       <Button size="lg" onClick={startGoogleAuth} className="gap-2">
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor">
