@@ -5,6 +5,11 @@ import {
   handleTelegramMessage,
 } from "../services/telegram-handler";
 import { sendTelegramRaw, setTelegramWebhook } from "../services/notifications/telegram";
+import {
+  requireTelegramSetupSecret,
+  requireTelegramWebhookSecret,
+} from "../lib/telegram-webhook-auth";
+import { getTelegramWebhookSecret } from "../lib/secrets";
 
 const router = Router();
 
@@ -28,7 +33,7 @@ function pickTelegramImage(message: {
   return null;
 }
 
-router.post("/", async (req, res) => {
+router.post("/", requireTelegramWebhookSecret, async (req, res) => {
   const update = req.body;
 
   try {
@@ -84,12 +89,13 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Setup helper endpoint
-router.post("/setup", async (_req, res) => {
+// Setup helper endpoint (requires TELEGRAM_WEBHOOK_SECRET as Bearer token)
+router.post("/setup", requireTelegramSetupSecret, async (_req, res) => {
   if (!process.env.TELEGRAM_WEBHOOK_URL) {
     return res.status(400).json({ error: "TELEGRAM_WEBHOOK_URL not set" });
   }
-  const result = await setTelegramWebhook(process.env.TELEGRAM_WEBHOOK_URL);
+  const secret = getTelegramWebhookSecret();
+  const result = await setTelegramWebhook(process.env.TELEGRAM_WEBHOOK_URL, secret || undefined);
   return res.json(result);
 });
 

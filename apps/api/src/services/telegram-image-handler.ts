@@ -61,7 +61,7 @@ export async function handleTelegramImage(
   if (!file) {
     await sendTelegramRaw(
       chatId,
-      "❌ Couldn't download that image from Telegram. Please try again.",
+      "❌ Couldn't download that image (file too large or unavailable). Try a smaller screenshot or paste the link as text.",
       "HTML"
     );
     return;

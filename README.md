@@ -88,7 +88,8 @@ cd apps/extension && pnpm dev
 After deploying or running the API:
 
 ```bash
-curl -X POST https://your-api.com/api/webhooks/telegram/setup
+curl -X POST https://your-api.com/api/webhooks/telegram/setup \
+  -H "Authorization: Bearer YOUR_TELEGRAM_WEBHOOK_SECRET"
 ```
 
 Or set it manually:
@@ -165,7 +166,8 @@ NEXT_PUBLIC_TELEGRAM_BOT_NAME="DeadlineAIBot"
 ### 3. Set Webhook
 
 ```bash
-curl -X POST https://your-api.com/api/webhooks/telegram/setup
+curl -X POST https://your-api.com/api/webhooks/telegram/setup \
+  -H "Authorization: Bearer YOUR_TELEGRAM_WEBHOOK_SECRET"
 ```
 
 ### 4. User Flow (Zero Friction)

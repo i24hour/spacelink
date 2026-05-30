@@ -3,8 +3,7 @@ import jwt from "jsonwebtoken";
 import { OAuth2Client } from "google-auth-library";
 import crypto from "crypto";
 import { prisma } from "./prisma";
-
-const JWT_SECRET = process.env.JWT_SECRET || "deadlineai-local-secret-change-me";
+import { JWT_SECRET, TELEGRAM_LINK_SECRET } from "./secrets";
 const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || "")
   .split(",")
   .map((s) => s.trim())
@@ -86,7 +85,6 @@ export async function upsertUserFromGoogle(googleUser: {
   return user;
 }
 
-const TELEGRAM_LINK_SECRET = process.env.TELEGRAM_LINK_SECRET || JWT_SECRET;
 const TELEGRAM_LINK_TTL_SECONDS = 60 * 10;
 
 function createSignedTelegramToken(kind: "u" | "c", value: string): string {

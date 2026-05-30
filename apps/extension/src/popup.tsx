@@ -10,6 +10,14 @@ const WEB_URL =
   (typeof process !== "undefined" && process.env?.PLASMO_PUBLIC_WEB_URL) ||
   "https://web-i24hours-projects.vercel.app";
 
+function isAllowedWebAuthOrigin(origin: string): boolean {
+  try {
+    return origin === new URL(WEB_URL).origin;
+  } catch {
+    return origin === WEB_URL;
+  }
+}
+
 type LinkItem = {
   id: string;
   url: string;
@@ -39,6 +47,7 @@ function IndexPopup() {
   // Listen for Google auth messages from popup window
   useEffect(() => {
     const handler = (event: MessageEvent) => {
+      if (!isAllowedWebAuthOrigin(event.origin)) return;
       if (event.data?.type === "DEADLINEAI_GOOGLE_ID_TOKEN") {
         exchangeGoogleToken(event.data.idToken);
       } else if (event.data?.type === "DEADLINEAI_GOOGLE_ERROR") {
@@ -111,7 +120,12 @@ function IndexPopup() {
   }
 
   function startGoogleAuth() {
-    window.open(`${WEB_URL}/auth`, "deadlineai_auth", "width=480,height=600");
+    const extensionOrigin = new URL(chrome.runtime.getURL("popup.html")).origin;
+    window.open(
+      `${WEB_URL}/auth?origin=${encodeURIComponent(extensionOrigin)}`,
+      "deadlineai_auth",
+      "width=480,height=600"
+    );
   }
 
   function handleDisconnect() {

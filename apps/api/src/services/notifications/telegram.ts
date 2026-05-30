@@ -1,5 +1,9 @@
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 
+/** Max image size downloaded from Telegram for vision extraction (default 10 MB). */
+const MAX_TELEGRAM_IMAGE_BYTES =
+  Number.parseInt(process.env.MAX_TELEGRAM_IMAGE_BYTES || "", 10) || 10 * 1024 * 1024;
+
 export type InlineKeyboardButton = {
   text: string;
   callback_data: string;
@@ -95,12 +99,13 @@ export async function sendTelegram(chatId: string, text: string) {
   return sendTelegramRaw(chatId, text, "Markdown");
 }
 
-export async function setTelegramWebhook(url: string) {
+export async function setTelegramWebhook(url: string, secretToken?: string) {
   if (!TELEGRAM_BOT_TOKEN) return { ok: false, error: "No bot token" };
-  const res = await fetch(
-    `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook?url=${encodeURIComponent(url)}`
-  );
-  return res.json();
+  const body: Record<string, unknown> = { url };
+  if (secretToken) {
+    body.secret_token = secretToken;
+  }
+  return telegramApi<{ ok?: boolean; description?: string }>("setWebhook", body);
 }
 
 export async function deleteTelegramWebhook() {
@@ -119,18 +124,54 @@ export async function downloadTelegramFile(
   try {
     const fileMeta = await telegramApi<{
       ok?: boolean;
-      result?: { file_path?: string };
+      result?: { file_path?: string; file_size?: number };
     }>("getFile", { file_id: fileId });
 
     const filePath = fileMeta.result?.file_path;
+    const fileSize = fileMeta.result?.file_size;
     if (!fileMeta.ok || !filePath) return null;
+
+    if (typeof fileSize === "number" && fileSize > MAX_TELEGRAM_IMAGE_BYTES) {
+      console.warn(
+        `downloadTelegramFile: rejected ${fileSize} bytes (max ${MAX_TELEGRAM_IMAGE_BYTES})`
+      );
+      return null;
+    }
 
     const res = await fetch(
       `https://api.telegram.org/file/bot${TELEGRAM_BOT_TOKEN}/${filePath}`
     );
     if (!res.ok) return null;
 
-    const buffer = Buffer.from(await res.arrayBuffer());
+    const contentLength = res.headers.get("content-length");
+    if (contentLength) {
+      const len = Number.parseInt(contentLength, 10);
+      if (Number.isFinite(len) && len > MAX_TELEGRAM_IMAGE_BYTES) {
+        console.warn(`downloadTelegramFile: Content-Length ${len} exceeds limit`);
+        return null;
+      }
+    }
+
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    const body = res.body;
+    if (!body) return null;
+
+    const reader = body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_TELEGRAM_IMAGE_BYTES) {
+        console.warn(`downloadTelegramFile: stream exceeded ${MAX_TELEGRAM_IMAGE_BYTES} bytes`);
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+
+    const buffer = Buffer.concat(chunks);
     const ext = filePath.split(".").pop()?.toLowerCase();
     const mimeType =
       ext === "png"

@@ -85,6 +85,16 @@ Generate one:
 openssl rand -base64 32
 ```
 
+### 9. Telegram Webhook Secret
+```
+TELEGRAM_WEBHOOK_SECRET="your-webhook-secret-here"
+```
+Generate one (16–256 chars, `A-Za-z0-9_-`):
+```bash
+openssl rand -hex 24
+```
+Telegram sends this on every webhook as `X-Telegram-Bot-Api-Secret-Token`. Required in production.
+
 ---
 
 ## Complete .env file for Render
@@ -111,6 +121,7 @@ EMAIL_FROM="DeadlineAI <...>"
 TELEGRAM_BOT_TOKEN="..."
 TELEGRAM_BOT_NAME="..."
 TELEGRAM_WEBHOOK_URL="https://deadlineai-api.onrender.com/api/webhooks/telegram"
+TELEGRAM_WEBHOOK_SECRET="..."
 CRON_INTERVAL_MS=60000
 ```
 

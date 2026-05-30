@@ -3,6 +3,7 @@ if (typeof window !== "undefined") {
     window.addEventListener(
       "message",
       (event) => {
+        if (event.origin !== window.location.origin) return;
         if (event.source !== window) return;
         if (event.data?.type === "DEADLINEAI_TOKEN") {
           chrome.runtime.sendMessage({

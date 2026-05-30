@@ -6,6 +6,18 @@ import { Button } from "@/components/ui/button";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const REDIRECT_URI = typeof window !== "undefined" ? `${window.location.origin}/auth` : "";
 
+/** Target origin for postMessage — extension passes ?origin=chrome-extension://… */
+function resolvePostMessageTarget(search: URLSearchParams): string {
+  const fromQuery = search.get("origin");
+  if (
+    fromQuery &&
+    (fromQuery.startsWith("chrome-extension://") || fromQuery === window.location.origin)
+  ) {
+    return fromQuery;
+  }
+  return window.location.origin;
+}
+
 export default function AuthPage() {
   const handled = useRef(false);
   const [status, setStatus] = useState<"idle" | "authenticating" | "connected_telegram" | "error">("idle");
@@ -38,7 +50,8 @@ export default function AuthPage() {
     if (idToken) {
       // We're in a popup after OAuth redirect. Send token to parent (extension).
       if (window.opener && !pendingTgLink) {
-        window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ID_TOKEN", idToken }, "*");
+        const postTarget = resolvePostMessageTarget(search);
+        window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ID_TOKEN", idToken }, postTarget);
         window.close();
       } else {
         // If opened directly (not as popup), exchange token ourselves
@@ -51,7 +64,8 @@ export default function AuthPage() {
     const error = params.get("error");
     if (error) {
       if (window.opener) {
-        window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ERROR", error }, "*");
+        const postTarget = resolvePostMessageTarget(search);
+        window.opener.postMessage({ type: "DEADLINEAI_GOOGLE_ERROR", error }, postTarget);
         window.close();
       } else {
         setStatus("error");

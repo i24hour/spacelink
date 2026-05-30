@@ -8,7 +8,7 @@ export default function ExtensionConnectPage() {
   useEffect(() => {
     const token = localStorage.getItem("deadlineai_token");
     if (token) {
-      window.postMessage({ type: "DEADLINEAI_TOKEN", token }, "*");
+      window.postMessage({ type: "DEADLINEAI_TOKEN", token }, window.location.origin);
       setStatus("Extension connected. You can close this tab.");
       setTimeout(() => window.close(), 800);
       return;
