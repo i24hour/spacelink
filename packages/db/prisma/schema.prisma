@@ -10,6 +10,10 @@ datasource db {
 model User {
   id                String   @id @default(cuid())
   email             String   @unique
+  username          String   @unique
+  displayName       String?  @map("display_name")
+  bio               String?
+  profileVisibility String   @default("private") @map("profile_visibility")
   telegramId        String?  @map("telegram_id")
   whatsappNumber    String?  @map("whatsapp_number")
   preferredChannels String[] @default(["email"]) @map("preferred_channels")
@@ -21,8 +25,25 @@ model User {
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   savedLinks SavedLink[]
+  followers  Follow[] @relation("UserFollowers")
+  following  Follow[] @relation("UserFollowing")
 
   @@map("app_users")
+}
+
+model Follow {
+  id          String   @id @default(cuid())
+  followerId  String   @map("follower_id")
+  followingId String   @map("following_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  follower  User @relation("UserFollowers", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("UserFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+  @@map("follows")
 }
 
 model SavedLink {
@@ -37,6 +58,7 @@ model SavedLink {
   urgencyScore               Int?      @map("urgency_score")
   confidenceScore            Float?    @map("confidence_score")
   status                     String    @default("active")
+  visibility                 String    @default("private")
   rollingApplication         Boolean   @default(false) @map("rolling_application")
   estimatedCompletionMinutes Int?      @map("estimated_completion_minutes")
   metadata                   Json?     @default("{}")
@@ -49,6 +71,7 @@ model SavedLink {
   @@index([userId])
   @@index([status])
   @@index([extractedDeadline])
+  @@index([visibility])
   @@map("saved_links")
 }
 

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Plus_Jakarta_Sans } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { Navbar } from "@/components/navbar";
+import { WaterBackground } from "@/components/water-background";
 import "./globals.css";
 
 const jakarta = Plus_Jakarta_Sans({
@@ -27,7 +28,8 @@ export default function RootLayout({
         style={{ fontFamily: "var(--font-jakarta), system-ui, sans-serif" }}
       >
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
-          <div className="relative min-h-screen mesh-bg">
+          <WaterBackground />
+          <div className="relative min-h-screen">
             <Navbar />
             <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">{children}</main>
           </div>

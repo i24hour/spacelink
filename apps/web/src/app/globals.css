@@ -4,48 +4,48 @@
 
 @layer base {
   :root {
-    --background: 166 76% 97%;
-    --foreground: 176 61% 19%;
+    --background: 0 0% 98%;
+    --foreground: 0 0% 6%;
     --card: 0 0% 100%;
-    --card-foreground: 176 61% 19%;
+    --card-foreground: 0 0% 6%;
     --popover: 0 0% 100%;
-    --popover-foreground: 176 61% 19%;
-    --primary: 174 84% 29%;
-    --primary-foreground: 166 76% 97%;
-    --secondary: 166 50% 92%;
-    --secondary-foreground: 176 61% 19%;
-    --muted: 166 40% 94%;
-    --muted-foreground: 176 25% 40%;
-    --accent: 25 95% 53%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 84% 60%;
+    --popover-foreground: 0 0% 6%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 93%;
+    --muted-foreground: 0 0% 42%;
+    --accent: 0 0% 92%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 0% 25%;
     --destructive-foreground: 0 0% 98%;
-    --border: 166 30% 88%;
-    --input: 166 30% 88%;
-    --ring: 174 84% 29%;
-    --radius: 0.875rem;
+    --border: 0 0% 88%;
+    --input: 0 0% 88%;
+    --ring: 0 0% 9%;
+    --radius: 1rem;
   }
 
   .dark {
-    --background: 222 47% 6%;
-    --foreground: 180 20% 96%;
-    --card: 222 40% 9%;
-    --card-foreground: 180 20% 96%;
-    --popover: 222 40% 9%;
-    --popover-foreground: 180 20% 96%;
-    --primary: 173 72% 40%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 222 30% 14%;
-    --secondary-foreground: 180 20% 96%;
-    --muted: 222 30% 14%;
-    --muted-foreground: 215 16% 62%;
-    --accent: 25 95% 53%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 222 25% 16%;
-    --input: 222 25% 16%;
-    --ring: 173 72% 40%;
+    --background: 0 0% 0%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 100%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 90%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 58%;
+    --accent: 0 0% 78%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 0% 72%;
+    --destructive-foreground: 0 0% 0%;
+    --border: 0 0% 18%;
+    --input: 0 0% 16%;
+    --ring: 0 0% 100%;
   }
 }
 
@@ -59,14 +59,227 @@
 }
 
 @layer utilities {
-  .mesh-bg {
-    background-image:
-      radial-gradient(at 0% 0%, hsl(173 72% 40% / 0.12) 0px, transparent 50%),
-      radial-gradient(at 100% 0%, hsl(25 95% 53% / 0.08) 0px, transparent 45%),
-      radial-gradient(at 50% 100%, hsl(174 84% 29% / 0.1) 0px, transparent 50%);
+  .glass-card {
+    @apply border border-border bg-card/70 backdrop-blur-md;
   }
 
-  .glass-card {
-    @apply border border-border/60 bg-card/80 backdrop-blur-sm;
+  .water-card {
+    @apply relative overflow-hidden rounded-2xl border border-border bg-card/60 backdrop-blur-md transition-all duration-500 ease-out;
+  }
+
+  .water-card::before {
+    content: "";
+    position: absolute;
+    inset: -50%;
+    opacity: 0;
+    transform: translate(-30%, -30%) scale(0.6);
+    transition: opacity 0.6s ease, transform 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+    pointer-events: none;
+    background: radial-gradient(circle, rgba(0, 0, 0, 0.06) 0%, transparent 55%);
+  }
+
+  .dark .water-card::before {
+    background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 0%, transparent 55%);
+  }
+
+  .water-card:hover::before {
+    opacity: 1;
+    transform: translate(0, 0) scale(1);
+  }
+
+  .water-card:hover {
+    @apply border-foreground/20 shadow-lg;
+    transform: translateY(-2px);
+  }
+
+  .dark .water-card:hover {
+    box-shadow: 0 0 40px rgba(255, 255, 255, 0.06);
+  }
+
+  .theme-input {
+    @apply border-border bg-background/80 text-foreground placeholder:text-muted-foreground focus-visible:ring-ring/30;
+  }
+
+  .theme-filter-bar {
+    @apply rounded-xl border border-border bg-muted/50 p-1 backdrop-blur-sm;
+  }
+
+  .theme-badge {
+    @apply inline-flex items-center gap-2 rounded-full border border-border bg-muted px-3 py-1 text-xs font-medium text-muted-foreground;
+  }
+
+  .theme-skeleton {
+    @apply bg-muted;
+  }
+}
+
+/* Flowing water background */
+.water-scene {
+  background: hsl(var(--background));
+}
+
+.water-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  animation: water-drift 22s ease-in-out infinite;
+}
+
+/* Light mode blobs — soft grey ink in water */
+.water-blob-1 {
+  width: 55vw;
+  height: 55vw;
+  max-width: 680px;
+  max-height: 680px;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.06) 0%, transparent 70%);
+  top: -15%;
+  left: -10%;
+  animation-duration: 26s;
+  opacity: 0.7;
+}
+
+.water-blob-2 {
+  width: 45vw;
+  height: 45vw;
+  max-width: 520px;
+  max-height: 520px;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.04) 0%, transparent 68%);
+  top: 35%;
+  right: -12%;
+  animation-duration: 32s;
+  animation-delay: -8s;
+  opacity: 0.6;
+}
+
+.water-blob-3 {
+  width: 40vw;
+  height: 40vw;
+  max-width: 480px;
+  max-height: 480px;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.05) 0%, transparent 65%);
+  bottom: -10%;
+  left: 25%;
+  animation-duration: 28s;
+  animation-delay: -14s;
+  opacity: 0.55;
+}
+
+.water-blob-4 {
+  width: 35vw;
+  height: 35vw;
+  max-width: 400px;
+  max-height: 400px;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.03) 0%, transparent 60%);
+  top: 55%;
+  left: 55%;
+  animation-duration: 20s;
+  animation-delay: -6s;
+  opacity: 0.5;
+}
+
+.dark .water-blob-1 {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.14) 0%, transparent 70%);
+  opacity: 0.35;
+}
+
+.dark .water-blob-2 {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.08) 0%, transparent 68%);
+  opacity: 0.35;
+}
+
+.dark .water-blob-3 {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.06) 0%, transparent 65%);
+  opacity: 0.35;
+}
+
+.dark .water-blob-4 {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.05) 0%, transparent 60%);
+  opacity: 0.25;
+}
+
+.water-wave {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    120deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.02) 45%,
+    transparent 90%
+  );
+  background-size: 200% 200%;
+  animation: water-shimmer 12s linear infinite;
+}
+
+.dark .water-wave {
+  background: linear-gradient(
+    120deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.03) 45%,
+    transparent 90%
+  );
+}
+
+.water-wave-2 {
+  background: linear-gradient(
+    -60deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.015) 50%,
+    transparent 100%
+  );
+  animation-duration: 18s;
+  animation-direction: reverse;
+  opacity: 0.7;
+}
+
+.dark .water-wave-2 {
+  background: linear-gradient(
+    -60deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.02) 50%,
+    transparent 100%
+  );
+}
+
+.water-grain {
+  position: absolute;
+  inset: 0;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.dark .water-grain {
+  opacity: 0.04;
+}
+
+@keyframes water-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(6%, 4%) scale(1.08);
+  }
+  66% {
+    transform: translate(-4%, 6%) scale(0.94);
+  }
+}
+
+@keyframes water-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .water-blob,
+  .water-wave {
+    animation: none;
+  }
+
+  .water-card:hover {
+    transform: none;
   }
 }

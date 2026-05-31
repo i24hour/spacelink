@@ -5,8 +5,10 @@ import {
   Archive,
   ArrowUpRight,
   Clock,
-  Flame,
+  Globe,
+  Lock,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,90 +30,94 @@ export type SavedLink = {
   status: string;
   rollingApplication: boolean;
   estimatedCompletionMinutes: number | null;
+  visibility?: string;
   createdAt: string;
 };
 
-const urgencyStyles: Record<
-  DeadlineUrgency,
-  { badge: string; ring: string; label: string }
-> = {
+const urgencyStyles: Record<DeadlineUrgency, { badge: string; stripe: string }> = {
   passed: {
-    badge: "bg-muted text-muted-foreground",
-    ring: "ring-muted/40",
-    label: "Passed",
+    badge: "bg-muted text-muted-foreground ring-border",
+    stripe: "from-muted-foreground/30 to-transparent",
   },
   critical: {
-    badge: "bg-destructive/15 text-destructive",
-    ring: "ring-destructive/30",
-    label: "Due soon",
+    badge: "bg-primary text-primary-foreground ring-primary",
+    stripe: "from-primary to-primary/30",
   },
   soon: {
-    badge: "bg-accent/15 text-accent",
-    ring: "ring-accent/30",
-    label: "This week",
+    badge: "bg-muted text-foreground ring-border",
+    stripe: "from-foreground/50 to-transparent dark:from-white/70 dark:to-white/10",
   },
   upcoming: {
-    badge: "bg-primary/15 text-primary",
-    ring: "ring-primary/30",
-    label: "Upcoming",
+    badge: "bg-muted text-foreground/80 ring-border",
+    stripe: "from-foreground/30 to-transparent dark:from-white/40",
   },
   none: {
-    badge: "bg-secondary text-muted-foreground",
-    ring: "ring-border",
-    label: "No date",
+    badge: "bg-muted text-muted-foreground ring-border",
+    stripe: "from-muted-foreground/20 to-transparent",
   },
 };
 
 type DeadlineCardProps = {
   link: SavedLink;
-  index: number;
   onArchive: (id: string) => void;
   onDelete: (id: string) => void;
+  onToggleVisibility?: (id: string, visibility: "public" | "private") => void;
 };
 
-export function DeadlineCard({ link, index, onArchive, onDelete }: DeadlineCardProps) {
+export function DeadlineCard({
+  link,
+  onArchive,
+  onDelete,
+  onToggleVisibility,
+}: DeadlineCardProps) {
   const urgency = getDeadlineUrgency(link.extractedDeadline);
   const style = urgencyStyles[urgency];
   const isHighScore = (link.urgencyScore ?? 0) >= 7;
 
   return (
     <motion.article
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25, delay: index * 0.04 }}
+      layout
+      initial={{ opacity: 0, y: 24, filter: "blur(6px)" }}
+      animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+      exit={{ opacity: 0, y: -12, filter: "blur(4px)", scale: 0.98 }}
+      transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+      whileHover={{ y: -3 }}
       className={cn(
-        "group glass-card relative overflow-hidden rounded-2xl p-5 transition-all duration-200 hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5",
-        link.status === "archived" && "opacity-60"
+        "water-card group p-5",
+        link.status === "archived" && "opacity-50"
       )}
     >
       <div
         className={cn(
-          "absolute inset-y-0 left-0 w-1 rounded-l-2xl bg-gradient-to-b from-primary to-primary/40",
-          urgency === "critical" && "from-destructive to-destructive/40",
-          urgency === "soon" && "from-accent to-accent/40",
-          urgency === "passed" && "from-muted-foreground/40 to-transparent"
+          "absolute inset-y-0 left-0 w-0.5 rounded-l-2xl bg-gradient-to-b",
+          style.stripe
         )}
       />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1 pl-2">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-base font-semibold tracking-tight sm:text-lg">
+            <h3 className="truncate text-base font-semibold tracking-tight text-foreground sm:text-lg">
               {link.title}
             </h3>
             {link.rollingApplication && (
-              <Badge variant="secondary" className="font-normal">
+              <Badge
+                variant="outline"
+                className="border-border bg-muted font-normal text-muted-foreground"
+              >
                 Rolling
               </Badge>
             )}
             {isHighScore && (
-              <Badge className="gap-1 bg-accent/15 text-accent hover:bg-accent/20">
-                <Flame className="h-3 w-3" />
+              <Badge className="gap-1 border-border bg-muted font-normal text-foreground hover:bg-muted/80">
+                <Zap className="h-3 w-3" />
                 High urgency
               </Badge>
             )}
             {link.status === "archived" && (
-              <Badge variant="outline">Archived</Badge>
+              <Badge variant="outline" className="border-border text-muted-foreground">
+                Archived
+              </Badge>
             )}
           </div>
 
@@ -119,23 +125,25 @@ export function DeadlineCard({ link, index, onArchive, onDelete }: DeadlineCardP
             href={link.url}
             target="_blank"
             rel="noreferrer"
-            className="mt-1.5 flex cursor-pointer items-center gap-1 truncate text-sm text-muted-foreground transition-colors hover:text-primary"
+            className="mt-1.5 flex cursor-pointer items-center gap-1 truncate text-sm text-muted-foreground transition-colors duration-300 hover:text-foreground"
           >
             <span className="truncate">{link.url.replace(/^https?:\/\//, "")}</span>
-            <ArrowUpRight className="h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+            <ArrowUpRight className="h-3.5 w-3.5 shrink-0 opacity-0 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:opacity-100" />
           </a>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {link.category && (
-              <Badge variant="outline" className="capitalize font-normal">
+              <Badge
+                variant="outline"
+                className="border-border capitalize font-normal text-muted-foreground"
+              >
                 {link.category}
               </Badge>
             )}
             <span
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ring-1",
-                style.badge,
-                style.ring
+                style.badge
               )}
             >
               <Clock className="h-3 w-3" />
@@ -152,11 +160,41 @@ export function DeadlineCard({ link, index, onArchive, onDelete }: DeadlineCardP
         </div>
 
         <div className="flex shrink-0 items-center gap-2 pl-2 sm:flex-col sm:items-end">
+          {onToggleVisibility && link.status !== "archived" && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="cursor-pointer"
+              onClick={() =>
+                onToggleVisibility(
+                  link.id,
+                  link.visibility === "public" ? "private" : "public"
+                )
+              }
+              title={
+                link.visibility === "public"
+                  ? "Visible on your public profile"
+                  : "Only visible to you"
+              }
+            >
+              {link.visibility === "public" ? (
+                <>
+                  <Globe className="mr-1.5 h-3.5 w-3.5" />
+                  Public
+                </>
+              ) : (
+                <>
+                  <Lock className="mr-1.5 h-3.5 w-3.5" />
+                  Private
+                </>
+              )}
+            </Button>
+          )}
           {link.status !== "archived" && (
             <Button
               size="sm"
               variant="outline"
-              className="cursor-pointer border-border/80"
+              className="cursor-pointer"
               onClick={() => onArchive(link.id)}
             >
               <Archive className="mr-1.5 h-3.5 w-3.5" />
@@ -166,7 +204,7 @@ export function DeadlineCard({ link, index, onArchive, onDelete }: DeadlineCardP
           <Button
             size="sm"
             variant="ghost"
-            className="cursor-pointer text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            className="cursor-pointer text-muted-foreground hover:text-foreground"
             onClick={() => onDelete(link.id)}
             aria-label="Delete link"
           >

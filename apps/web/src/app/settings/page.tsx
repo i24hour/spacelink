@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useApi } from "@/lib/api-client";
+import { useCallback, useEffect, useState } from "react";
+import { FetchTimeoutError, fetchWithTimeout, useApi } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +12,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 type UserProfile = {
   id: string;
   email: string;
+  username: string;
+  displayName: string | null;
+  bio: string | null;
+  profileVisibility: "public" | "private";
+  followersCount?: number;
+  followingCount?: number;
   timezone: string;
   timezoneConfigured?: boolean;
   preferredChannels: string[];
@@ -18,6 +25,9 @@ type UserProfile = {
   telegramConnected: boolean;
   plan: string;
 };
+
+const FETCH_TIMEOUT_MS = 45_000;
+const SLOW_HINT_MS = 5_000;
 
 const timezones: { id: string; label: string }[] = [
   { id: "Asia/Kolkata", label: "India (IST)" },
@@ -39,21 +49,85 @@ const channels = [
   { id: "telegram", label: "Telegram" },
 ];
 
+function normalizeUser(data: Partial<UserProfile> & { id: string; email: string }): UserProfile {
+  return {
+    id: data.id,
+    email: data.email,
+    username: data.username || "",
+    displayName: data.displayName ?? null,
+    bio: data.bio ?? null,
+    profileVisibility: data.profileVisibility === "public" ? "public" : "private",
+    followersCount: data.followersCount,
+    followingCount: data.followingCount,
+    timezone: data.timezone || "UTC",
+    timezoneConfigured: data.timezoneConfigured ?? false,
+    preferredChannels: data.preferredChannels?.length ? data.preferredChannels : ["email"],
+    telegramId: data.telegramId,
+    telegramConnected: !!data.telegramConnected || !!data.telegramId,
+    plan: data.plan || "free",
+  };
+}
+
 export default function SettingsPage() {
   const { fetcher } = useApi();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [slowHint, setSlowHint] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [profileAvailable, setProfileAvailable] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
   const [testingTelegram, setTestingTelegram] = useState(false);
   const [testResult, setTestResult] = useState<{ type: string; ok: boolean; msg: string } | null>(null);
 
-  useEffect(() => {
-    fetcher("/api/users/me")
-      .then((data: UserProfile) => setUser(data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+  const loadSettings = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    setSlowHint(false);
+
+    const slowTimer = setTimeout(() => setSlowHint(true), SLOW_HINT_MS);
+
+    try {
+      const me = await fetchWithTimeout(
+        () => fetcher("/api/users/me"),
+        FETCH_TIMEOUT_MS,
+        "Server is taking too long to respond"
+      );
+
+      let merged: UserProfile = normalizeUser(me);
+
+      try {
+        const profile = await fetchWithTimeout(
+          () => fetcher("/api/profile"),
+          10_000,
+          "Profile request timed out"
+        );
+        merged = normalizeUser({ ...me, ...profile });
+        setProfileAvailable(true);
+      } catch {
+        setProfileAvailable(false);
+      }
+
+      setUser(merged);
+    } catch (e: unknown) {
+      const message =
+        e instanceof FetchTimeoutError
+          ? "Server is waking up — this can take up to a minute on the free tier. Please retry."
+          : e instanceof Error
+            ? e.message
+            : "Failed to load settings";
+      setLoadError(message);
+      setUser(null);
+    } finally {
+      clearTimeout(slowTimer);
+      setLoading(false);
+      setSlowHint(false);
+    }
   }, [fetcher]);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const toggleChannel = (id: string) => {
     if (!user) return;
@@ -66,18 +140,48 @@ export default function SettingsPage() {
   const handleSave = async () => {
     if (!user) return;
     setSaving(true);
+    setTestResult(null);
     try {
-      const updated = await fetcher("/api/users/me", {
+      const prefsUpdated = await fetcher("/api/users/me", {
         method: "PATCH",
         body: JSON.stringify({
           timezone: user.timezone,
           preferredChannels: user.preferredChannels,
         }),
       });
-      setUser(updated);
+
+      let profileUpdated: Partial<UserProfile> = {};
+      if (profileAvailable) {
+        try {
+          profileUpdated = await fetcher("/api/profile", {
+            method: "PATCH",
+            body: JSON.stringify({
+              username: user.username,
+              displayName: user.displayName,
+              bio: user.bio,
+              profileVisibility: user.profileVisibility,
+            }),
+          });
+        } catch {
+          setProfileAvailable(false);
+          setTestResult({
+            type: "save",
+            ok: true,
+            msg: "Notification settings saved. Profile fields could not be updated — the profile API is not available yet.",
+          });
+          setUser(normalizeUser({ ...user, ...prefsUpdated }));
+          return;
+        }
+      }
+
+      setUser(normalizeUser({ ...user, ...prefsUpdated, ...profileUpdated }));
       setTestResult({ type: "save", ok: true, msg: "Settings saved successfully." });
-    } catch (e: any) {
-      setTestResult({ type: "save", ok: false, msg: e.message || "Failed to save" });
+    } catch (e: unknown) {
+      setTestResult({
+        type: "save",
+        ok: false,
+        msg: e instanceof Error ? e.message : "Failed to save",
+      });
     } finally {
       setSaving(false);
     }
@@ -90,8 +194,12 @@ export default function SettingsPage() {
         window.open(data.url, "_blank");
         setTestResult({ type: "telegram", ok: true, msg: "Telegram bot opened! Click Start in Telegram to connect." });
       }
-    } catch (e: any) {
-      setTestResult({ type: "telegram", ok: false, msg: e.message || "Failed to generate link" });
+    } catch (e: unknown) {
+      setTestResult({
+        type: "telegram",
+        ok: false,
+        msg: e instanceof Error ? e.message : "Failed to generate link",
+      });
     }
   };
 
@@ -101,8 +209,12 @@ export default function SettingsPage() {
     try {
       const res = await fetcher("/api/notifications/test-email", { method: "POST" });
       setTestResult({ type: "email", ok: res.ok, msg: res.ok ? "Test email sent! Check your inbox." : res.error });
-    } catch (e: any) {
-      setTestResult({ type: "email", ok: false, msg: e.message || "Failed to send test email" });
+    } catch (e: unknown) {
+      setTestResult({
+        type: "email",
+        ok: false,
+        msg: e instanceof Error ? e.message : "Failed to send test email",
+      });
     } finally {
       setTestingEmail(false);
     }
@@ -118,18 +230,40 @@ export default function SettingsPage() {
     try {
       const res = await fetcher("/api/notifications/test-telegram", { method: "POST" });
       setTestResult({ type: "telegram", ok: res.ok, msg: res.ok ? "Test message sent! Check Telegram." : res.error });
-    } catch (e: any) {
-      setTestResult({ type: "telegram", ok: false, msg: e.message || "Failed to send test Telegram" });
+    } catch (e: unknown) {
+      setTestResult({
+        type: "telegram",
+        ok: false,
+        msg: e instanceof Error ? e.message : "Failed to send test Telegram",
+      });
     } finally {
       setTestingTelegram(false);
     }
   };
 
-  if (loading || !user) {
+  if (loading) {
     return (
-      <div className="space-y-4">
+      <div className="max-w-xl space-y-4">
         <Skeleton className="h-8 w-40" />
+        {slowHint && (
+          <div className="rounded-lg border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
+            Server waking up… the API can take up to a minute on cold start.
+          </div>
+        )}
         <Skeleton className="h-48 w-full" />
+      </div>
+    );
+  }
+
+  if (loadError || !user) {
+    return (
+      <div className="max-w-xl space-y-4">
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">Settings</h2>
+        <div className="rounded-lg border border-border bg-muted px-4 py-4 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Could not load settings</p>
+          <p className="mt-1">{loadError || "Something went wrong."}</p>
+        </div>
+        <Button onClick={loadSettings}>Retry</Button>
       </div>
     );
   }
@@ -141,7 +275,7 @@ export default function SettingsPage() {
   return (
     <div className="max-w-xl space-y-6">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight">Settings</h2>
+        <h2 className="text-2xl font-bold tracking-tight text-foreground">Settings</h2>
         <p className="text-muted-foreground">Manage reminders and notification channels.</p>
       </div>
 
@@ -149,17 +283,109 @@ export default function SettingsPage() {
         <div
           className={`rounded-lg border px-4 py-3 text-sm ${
             testResult.ok
-              ? "border-emerald-800/30 bg-emerald-900/10 text-emerald-400"
-              : "border-red-800/30 bg-red-900/10 text-red-400"
+              ? "border-border bg-muted text-foreground"
+              : "border-border bg-muted/80 text-muted-foreground"
           }`}
         >
           {testResult.msg}
         </div>
       )}
 
-      <Card>
+      <Card className="glass-card backdrop-blur-md">
         <CardHeader>
-          <CardTitle>Notification channels</CardTitle>
+          <CardTitle className="text-foreground">Appearance</CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-foreground">Theme</p>
+            <p className="text-xs text-muted-foreground">Switch between light and dark mode</p>
+          </div>
+          <ThemeToggle />
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card backdrop-blur-md">
+        <CardHeader>
+          <CardTitle className="text-foreground">Profile</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!profileAvailable && (
+            <p className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+              Profile editing is limited until the profile API is deployed. Notification settings below still work.
+            </p>
+          )}
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Username</label>
+            <Input
+              value={user.username}
+              onChange={(e) =>
+                setUser({
+                  ...user,
+                  username: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, ""),
+                })
+              }
+              disabled={!profileAvailable}
+              className="theme-input"
+            />
+            <p className="text-xs text-muted-foreground">
+              Public URL: /profile/{user.username || "…"}
+            </p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Display name</label>
+            <Input
+              value={user.displayName || ""}
+              onChange={(e) => setUser({ ...user, displayName: e.target.value || null })}
+              placeholder="Optional"
+              disabled={!profileAvailable}
+              className="theme-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Bio</label>
+            <Input
+              value={user.bio || ""}
+              onChange={(e) => setUser({ ...user, bio: e.target.value || null })}
+              placeholder="Short bio (optional)"
+              disabled={!profileAvailable}
+              className="theme-input"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground">Profile visibility</label>
+            <div className="flex gap-2">
+              {(["private", "public"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => profileAvailable && setUser({ ...user, profileVisibility: v })}
+                  disabled={!profileAvailable}
+                  className={`rounded-md border px-3 py-2 text-sm capitalize transition-colors ${
+                    user.profileVisibility === v
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground hover:bg-muted"
+                  } ${!profileAvailable ? "cursor-not-allowed opacity-60" : ""}`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Public profiles appear on the leaderboard. Mark individual links public on
+              the dashboard to share deadlines.
+            </p>
+          </div>
+          {(user.followersCount != null || user.followingCount != null) && (
+            <p className="text-sm text-muted-foreground">
+              {user.followersCount ?? 0} followers · {user.followingCount ?? 0} following
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card backdrop-blur-md">
+        <CardHeader>
+          <CardTitle className="text-foreground">Notification channels</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-2">
@@ -191,7 +417,7 @@ export default function SettingsPage() {
           <div className="space-y-2">
             <label className="text-sm font-medium">Timezone</label>
             {!user.timezoneConfigured && (
-              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+              <p className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
                 Choose your timezone so deadlines and reminders match your local time (IST, PT, PST, etc.).
               </p>
             )}
@@ -215,9 +441,9 @@ export default function SettingsPage() {
       </Card>
 
       {/* Email Section */}
-      <Card>
+      <Card className="glass-card backdrop-blur-md">
         <CardHeader>
-          <CardTitle>Email</CardTitle>
+          <CardTitle className="text-foreground">Email</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
@@ -239,14 +465,14 @@ export default function SettingsPage() {
       </Card>
 
       {/* Telegram Section */}
-      <Card>
+      <Card className="glass-card backdrop-blur-md">
         <CardHeader>
-          <CardTitle>Telegram</CardTitle>
+          <CardTitle className="text-foreground">Telegram</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           {user.telegramConnected ? (
-            <div className="rounded-md bg-emerald-900/10 p-3 text-sm border border-emerald-800/30">
-              <span className="font-medium text-emerald-400">Telegram connected</span>
+            <div className="rounded-md border border-border bg-muted p-3 text-sm">
+              <span className="font-medium text-foreground">Telegram connected</span>
               <p className="text-muted-foreground mt-1">
                 You will receive deadline reminders in Telegram.
               </p>
@@ -291,9 +517,9 @@ export default function SettingsPage() {
       </Card>
 
       {/* Plan Section */}
-      <Card>
+      <Card className="glass-card backdrop-blur-md">
         <CardHeader>
-          <CardTitle>Plan</CardTitle>
+          <CardTitle className="text-foreground">Plan</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between">

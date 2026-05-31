@@ -1,6 +1,7 @@
 import { Router, raw } from "express";
 import { Webhook } from "svix";
 import { prisma } from "../lib/prisma";
+import { generateUniqueUsername } from "../lib/username";
 
 const router = Router();
 
@@ -22,11 +23,18 @@ router.post("/clerk", raw({ type: "application/json" }), async (req, res) => {
   )?.email_address;
 
   if (evt.type === "user.created") {
-    await prisma.user.upsert({
-      where: { id },
-      create: { id, email: email || "" },
-      update: { email: email || "" },
-    });
+    const existing = await prisma.user.findUnique({ where: { id } });
+    if (!existing) {
+      const username = await generateUniqueUsername(email || id);
+      await prisma.user.create({
+        data: { id, email: email || "", username },
+      });
+    } else {
+      await prisma.user.update({
+        where: { id },
+        data: { email: email || "" },
+      });
+    }
   } else if (evt.type === "user.updated") {
     await prisma.user.update({
       where: { id },

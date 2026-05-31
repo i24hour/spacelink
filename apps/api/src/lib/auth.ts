@@ -4,6 +4,7 @@ import { OAuth2Client } from "google-auth-library";
 import crypto from "crypto";
 import { prisma } from "./prisma";
 import { JWT_SECRET, TELEGRAM_LINK_SECRET } from "./secrets";
+import { generateUniqueUsername } from "./username";
 const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || "")
   .split(",")
   .map((s) => s.trim())
@@ -74,13 +75,17 @@ export async function upsertUserFromGoogle(googleUser: {
   name: string;
   picture: string | null;
 }) {
-  const user = await prisma.user.upsert({
-    where: { email: googleUser.email },
-    create: {
+  const existing = await prisma.user.findUnique({ where: { email: googleUser.email } });
+  if (existing) return existing;
+
+  const username = await generateUniqueUsername(googleUser.email);
+  const user = await prisma.user.create({
+    data: {
       id: `g_${googleUser.googleId}`,
       email: googleUser.email,
+      username,
+      displayName: googleUser.name || null,
     },
-    update: {},
   });
   return user;
 }

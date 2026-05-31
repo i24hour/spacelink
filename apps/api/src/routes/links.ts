@@ -87,6 +87,7 @@ router.patch("/:id", universalAuth, async (req: AuthRequest, res: any) => {
       rollingApplication: z.boolean().optional(),
       estimatedCompletionMinutes: z.number().optional(),
       status: z.enum(["active", "archived", "expired"]).optional(),
+      visibility: z.enum(["public", "private"]).optional(),
     });
 
     const data = updateSchema.parse(req.body);

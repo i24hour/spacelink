@@ -8,6 +8,8 @@ import authRouter from "./routes/auth";
 import linksRouter from "./routes/links";
 import remindersRouter from "./routes/reminders";
 import usersRouter from "./routes/users";
+import profileRouter from "./routes/profile";
+import leaderboardRouter from "./routes/leaderboard";
 import webhooksRouter from "./routes/webhooks";
 import notificationsRouter from "./routes/notifications";
 import telegramWebhookRouter from "./routes/telegram-webhook";
@@ -40,6 +42,8 @@ app.use("/api/webhooks/telegram", telegramWebhookRouter);
 app.use("/api/links", linksRouter);
 app.use("/api/reminders", remindersRouter);
 app.use("/api/users", usersRouter);
+app.use("/api/profile", profileRouter);
+app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/notifications", notificationsRouter);
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

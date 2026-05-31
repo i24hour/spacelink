@@ -23,9 +23,14 @@ npm-debug.log*
 *.pem
 .turbo
 
+# Local DB query dumps (may contain PII)
+scripts/db_output.txt
+scripts/db_links_detail.txt
+
 # IDE
 .vscode/
 .idea/
 
 # Prisma
 packages/db/prisma/migrations/
+.vercel
