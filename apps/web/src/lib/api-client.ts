@@ -11,6 +11,16 @@ export class FetchTimeoutError extends Error {
   }
 }
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 export async function fetchWithTimeout<T>(
   fn: () => Promise<T>,
   ms: number,
@@ -52,7 +62,7 @@ export function useApi() {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || res.statusText);
+      throw new ApiError(body.error || res.statusText, res.status);
     }
     return res.json();
   }, []);
@@ -67,7 +77,7 @@ export function useApi() {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || res.statusText);
+      throw new ApiError(body.error || res.statusText, res.status);
     }
     return res.json();
   }, []);

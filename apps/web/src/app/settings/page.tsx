@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FetchTimeoutError, fetchWithTimeout, useApi } from "@/lib/api-client";
+import { useRouter } from "next/navigation";
+import { ApiError, FetchTimeoutError, fetchWithTimeout, useApi } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Input } from "@/components/ui/input";
@@ -70,10 +71,12 @@ function normalizeUser(data: Partial<UserProfile> & { id: string; email: string 
 
 export default function SettingsPage() {
   const { fetcher } = useApi();
+  const router = useRouter();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [slowHint, setSlowHint] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [needsReauth, setNeedsReauth] = useState(false);
   const [profileAvailable, setProfileAvailable] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
@@ -83,6 +86,7 @@ export default function SettingsPage() {
   const loadSettings = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
+    setNeedsReauth(false);
     setSlowHint(false);
 
     const slowTimer = setTimeout(() => setSlowHint(true), SLOW_HINT_MS);
@@ -110,13 +114,21 @@ export default function SettingsPage() {
 
       setUser(merged);
     } catch (e: unknown) {
-      const message =
-        e instanceof FetchTimeoutError
-          ? "Server is waking up — this can take up to a minute on the free tier. Please retry."
-          : e instanceof Error
-            ? e.message
-            : "Failed to load settings";
-      setLoadError(message);
+      if (
+        e instanceof ApiError &&
+        (e.status === 401 || (e.status === 404 && e.message === "User not found"))
+      ) {
+        setNeedsReauth(true);
+        setLoadError("Your session is no longer valid. Please sign in again.");
+      } else {
+        const message =
+          e instanceof FetchTimeoutError
+            ? "Server is waking up — this can take up to a minute on the free tier. Please retry."
+            : e instanceof Error
+              ? e.message
+              : "Failed to load settings";
+        setLoadError(message);
+      }
       setUser(null);
     } finally {
       clearTimeout(slowTimer);
@@ -124,6 +136,11 @@ export default function SettingsPage() {
       setSlowHint(false);
     }
   }, [fetcher]);
+
+  const handleSignInAgain = () => {
+    localStorage.removeItem("deadlineai_token");
+    router.push("/auth");
+  };
 
   useEffect(() => {
     loadSettings();
@@ -263,7 +280,11 @@ export default function SettingsPage() {
           <p className="font-medium text-foreground">Could not load settings</p>
           <p className="mt-1">{loadError || "Something went wrong."}</p>
         </div>
-        <Button onClick={loadSettings}>Retry</Button>
+        {needsReauth ? (
+          <Button onClick={handleSignInAgain}>Sign in again</Button>
+        ) : (
+          <Button onClick={loadSettings}>Retry</Button>
+        )}
       </div>
     );
   }
