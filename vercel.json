@@ -1,5 +1,4 @@
 {
-  "rootDirectory": "apps/web",
   "installCommand": "pnpm install",
   "framework": "nextjs",
   "rewrites": [
