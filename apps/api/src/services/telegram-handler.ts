@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma";
+import { getFrontendUrl } from "../lib/frontend-url";
 import {
   formatNowInTimezone,
   needsTimezoneSetup,
@@ -303,7 +304,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   const cmd = normalizeCommand(raw);
   const detectedUrl = extractUrl(raw);
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
-  const webAppUrl = process.env.WEB_APP_URL || "https://web-i24hours-projects.vercel.app";
+  const webAppUrl = getFrontendUrl();
 
   async function connectThisChatUrl(): Promise<string> {
     const { createTelegramChatLinkToken } = await import("../lib/auth.js");
@@ -413,7 +414,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   // /list and /deadlines — card-style list with inline delete buttons
   if (cmd === "/list" || cmd === "/deadlines") {
     if (!linkedUser) {
-      await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
+      await sendTelegramRaw(chatId, `You need to sign in first. Visit ${getFrontendUrl()}/auth`, "HTML");
       return;
     }
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
@@ -424,7 +425,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   // /delete
   if (cmd.startsWith("/delete")) {
     if (!linkedUser) {
-      await sendTelegramRaw(chatId, "You need to sign in first. Visit https://web-i24hours-projects.vercel.app/auth", "HTML");
+      await sendTelegramRaw(chatId, `You need to sign in first. Visit ${getFrontendUrl()}/auth`, "HTML");
       return;
     }
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
@@ -455,7 +456,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      "<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href=\"https://web-i24hours-projects.vercel.app/auth\">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message",
+      `<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href="${getFrontendUrl()}/auth">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message`,
       "HTML"
     );
     return;
@@ -718,7 +719,7 @@ export async function handleTelegramImageMessage(
   input: TelegramIncomingImage
 ) {
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
-  const webAppUrl = process.env.WEB_APP_URL || "https://web-i24hours-projects.vercel.app";
+  const webAppUrl = getFrontendUrl();
 
   async function connectThisChatUrl(): Promise<string> {
     const { createTelegramChatLinkToken } = await import("../lib/auth.js");

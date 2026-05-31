@@ -8,7 +8,7 @@ const API_URL =
 
 const WEB_URL =
   (typeof process !== "undefined" && process.env?.PLASMO_PUBLIC_WEB_URL) ||
-  "https://web-i24hours-projects.vercel.app";
+  "https://spacelink-mocha.vercel.app";
 
 function isAllowedWebAuthOrigin(origin: string): boolean {
   try {

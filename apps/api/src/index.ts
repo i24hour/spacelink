@@ -18,6 +18,7 @@ import { linkProcessorWorker } from "./queues/processor";
 import { reminderDispatchWorker } from "./queues/dispatcher";
 import { startCron } from "./cron/reminders";
 import { validateSecretsAtStartup } from "./lib/secrets";
+import { getAllowedFrontendOrigins } from "./lib/frontend-url";
 
 validateSecretsAtStartup();
 
@@ -30,7 +31,19 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   })
 );
-app.use(cors({ origin: process.env.FRONTEND_URL || "http://localhost:3000", credentials: true }));
+const allowedOrigins = getAllowedFrontendOrigins();
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked origin: ${origin}`));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 

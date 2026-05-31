@@ -29,7 +29,7 @@ GOOGLE_CLIENT_IDS="your-client-id.apps.googleusercontent.com"
 1. Go to https://console.cloud.google.com/apis/credentials
 2. Create OAuth 2.0 Client ID (Web application)
 3. Add authorized redirect URIs:
-   - `https://web-i24hours-projects.vercel.app/auth`
+   - `https://spacelink-mocha.vercel.app/auth`
    - `http://localhost:3000/auth` (for local dev)
 4. Copy Client ID
 
@@ -108,7 +108,7 @@ DATABASE_URL="postgresql://..."
 UPSTASH_REDIS_URL="rediss://..."
 JWT_SECRET="..."
 GOOGLE_CLIENT_IDS="..."
-FRONTEND_URL="https://web-i24hours-projects.vercel.app"
+FRONTEND_URL="https://spacelink-mocha.vercel.app"
 LITELLM_PROXY_URL="..."
 LITELLM_API_KEY="..."
 LITELLM_MODEL="gpt-4o-mini"
