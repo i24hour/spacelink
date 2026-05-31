@@ -25,8 +25,8 @@ model User {
   updatedAt         DateTime @updatedAt @map("updated_at")
 
   savedLinks SavedLink[]
-  followers  Follow[] @relation("UserFollowers")
-  following  Follow[] @relation("UserFollowing")
+  followers  Follow[] @relation("IncomingFollows")
+  following  Follow[] @relation("OutgoingFollows")
 
   @@map("app_users")
 }
@@ -37,8 +37,8 @@ model Follow {
   followingId String   @map("following_id")
   createdAt   DateTime @default(now()) @map("created_at")
 
-  follower  User @relation("UserFollowers", fields: [followerId], references: [id], onDelete: Cascade)
-  following User @relation("UserFollowing", fields: [followingId], references: [id], onDelete: Cascade)
+  follower  User @relation("OutgoingFollows", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("IncomingFollows", fields: [followingId], references: [id], onDelete: Cascade)
 
   @@unique([followerId, followingId])
   @@index([followerId])

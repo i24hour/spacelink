@@ -20,6 +20,7 @@ router.get("/me", universalAuth, async (req: AuthRequest, res: any) => {
     const userId = req.userId as string;
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return res.status(404).json({ error: "User not found" });
+    const counts = await getFollowCounts(userId);
     return res.json({
       id: user.id,
       email: user.email,
@@ -33,6 +34,7 @@ router.get("/me", universalAuth, async (req: AuthRequest, res: any) => {
       telegramId: user.telegramId,
       telegramConnected: !!user.telegramId,
       plan: user.plan,
+      ...counts,
     });
   } catch (err: any) {
     console.error(err);

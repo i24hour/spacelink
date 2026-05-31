@@ -44,15 +44,17 @@ export default function ProfilePage() {
   const [followLoading, setFollowLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = () => {
-    setLoading(true);
+  const load = (options?: { silent?: boolean }) => {
+    if (!options?.silent) setLoading(true);
     publicFetcher(`/api/users/${encodeURIComponent(username)}`)
       .then((data: PublicProfile) => {
         setProfile(data);
         setError(null);
       })
       .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!options?.silent) setLoading(false);
+      });
   };
 
   useEffect(() => {
@@ -72,10 +74,11 @@ export default function ProfilePage() {
               ...p,
               isFollowing: res.isFollowing,
               followersCount: res.followersCount ?? p.followersCount,
+              followingCount: res.followingCount ?? p.followingCount,
             }
           : p
       );
-      if (!profile.isFollowing && profile.isPrivate) load();
+      load({ silent: true });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to update follow");
     } finally {

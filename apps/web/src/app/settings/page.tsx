@@ -146,6 +146,31 @@ export default function SettingsPage() {
     loadSettings();
   }, [loadSettings]);
 
+  useEffect(() => {
+    const refreshCounts = () => {
+      if (document.visibilityState !== "visible") return;
+      fetcher("/api/users/me")
+        .then((me: UserProfile) => {
+          setUser((current) =>
+            current
+              ? normalizeUser({
+                  ...current,
+                  followersCount: me.followersCount,
+                  followingCount: me.followingCount,
+                })
+              : current
+          );
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("focus", refreshCounts);
+    document.addEventListener("visibilitychange", refreshCounts);
+    return () => {
+      window.removeEventListener("focus", refreshCounts);
+      document.removeEventListener("visibilitychange", refreshCounts);
+    };
+  }, [fetcher]);
+
   const toggleChannel = (id: string) => {
     if (!user) return;
     const next = user.preferredChannels.includes(id)
