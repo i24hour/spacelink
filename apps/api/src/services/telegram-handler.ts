@@ -10,6 +10,7 @@ import { parseDateFromUserText } from "./deadline-parse";
 import { clearPendingRemindersForLink } from "./reminders-smart";
 import {
   extractUrlDataWithFallback,
+  findExistingLinkForUser,
   isDeadlinePassed,
   saveExtractedUrlData,
   updateLinkFromExtraction,
@@ -614,32 +615,13 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       return;
     }
 
-    const existing = await prisma.savedLink.findFirst({
-      where: { userId: user.id, url },
-    });
-
-    const stillUpcoming =
-      existing?.extractedDeadline && !isDeadlinePassed(existing.extractedDeadline);
-
-    if (existing && stillUpcoming) {
-      const date = formatDeadlineInTimezone(
-        new Date(existing.extractedDeadline!),
-        user.timezone
-      );
-      const left = formatRelativeDeadline(new Date(existing.extractedDeadline!));
-      await sendTelegramRaw(
-        chatId,
-        `✅ <b>Already on your list</b>\n\n<b>${existing.title}</b>\n📅 ${date} · ${left}\n\nUse /list to see it.`,
-        "HTML"
-      );
-      return;
-    }
-
+    const existing = await findExistingLinkForUser(user.id, url);
     const restarting = Boolean(existing);
+
     await sendTelegramRaw(
       chatId,
       restarting
-        ? "🔄 Re-checking this link and updating the deadline…"
+        ? "🔄 Re-crawling this page for the latest deadline…"
         : "🔄 Reading the page and extracting deadline info...",
       "HTML"
     );
@@ -656,7 +638,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       }
 
       const result = existing
-        ? await updateLinkFromExtraction(existing.id, extracted)
+        ? await updateLinkFromExtraction(existing.id, extracted, { url })
         : await saveExtractedUrlData(url, user.id, extracted, {
             autoScheduleReminders: false,
           });
@@ -675,19 +657,16 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       }
 
       if (isDeadlinePassed(result.extractedDeadline)) {
-        const dateStr = formatDeadlineInTimezone(
-          new Date(result.extractedDeadline),
-          user.timezone
-        );
-        const ago = formatRelativeDeadline(new Date(result.extractedDeadline));
+        pendingDeadlineConfirmations.set(chatId, {
+          linkId: result.id,
+          awaiting: "manual_date",
+        });
         await sendTelegramRaw(
           chatId,
-          `⏰ <b>This deadline has already passed</b>\n\n` +
-            `<b>${result.title}</b>\n` +
-            `📅 ${dateStr}\n` +
-            `(${ago})\n\n` +
-            `It won't appear in /list (only upcoming deadlines). ` +
-            `If the date on the page is wrong, send the correct date here or paste again after the site updates.`,
+          `⚠️ <b>No upcoming deadline found on the page</b>\n\n` +
+            `<b>${result.title}</b>\n\n` +
+            `I re-crawled the full page but only found past dates or nothing clear. ` +
+            `If you know the correct deadline, send it now (example: 2026-06-30 11:59 PM IST).`,
           "HTML"
         );
         return;

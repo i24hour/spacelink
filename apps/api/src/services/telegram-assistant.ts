@@ -1,15 +1,13 @@
 import type { SavedLink, User } from "@deadlineai/db";
 import { prisma } from "../lib/prisma";
 import { litellm, extractWithLLM } from "../lib/llm";
-import { scrapeUrl } from "../lib/firecrawl";
-import { processExtractionFromUrl } from "./extraction-url";
+import { extractUrlDataWithFallback, processExtractionFromUrl, updateLinkFromExtraction } from "./extraction-url";
 import {
   formatCountdownHuman,
   formatDeadlineDisplay,
   parseDateFromUserText,
 } from "./deadline-parse";
 import { findLinkForQuery } from "./link-search";
-import { normalizeTimezone } from "../lib/timezones";
 import { clearPendingRemindersForLink } from "./reminders-smart";
 import { rebuildRemindersForLink, setUserDailyReminderHour } from "./reminder-engine";
 import { parseDailyReminderHour } from "../lib/daily-reminder-time";
@@ -64,34 +62,6 @@ function formatDeadlineDate(deadline: Date, timezone: string): string {
   } catch {
     return deadline.toISOString();
   }
-}
-
-function buildExtractionPrompt(title: string, content: string) {
-  return `
-You are DeadlineAI. Analyze this webpage content and extract deadline information.
-
-Page Title: ${title}
-Content: ${content.slice(0, 12000)}
-
-Return JSON only:
-{
-  "title": "Event/Program name",
-  "deadline": "2026-05-20T23:59:00",
-  "timezone": "IST",
-  "category": "hackathon|internship|grant|visa|contest|program",
-  "urgency_score": 1-10,
-  "confidence_score": 0.0-1.0,
-  "rolling_application": false,
-  "estimated_completion_minutes": 30
-}
-`.trim();
-}
-
-function parseDeadline(value: unknown): Date | null {
-  if (typeof value !== "string" || !value) return null;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed;
 }
 
 function safeJsonParse(input: string | undefined): Record<string, unknown> {
@@ -227,62 +197,9 @@ async function deleteLinkForQuery(userId: string, query: string) {
 }
 
 async function refreshExistingLink(user: User, link: SavedLink): Promise<SavedLink> {
-  let content = "";
-  let title = link.title || link.url;
-
-  try {
-    const scraped = await scrapeUrl(link.url);
-    content = scraped.markdown || scraped.html || "";
-    title = (scraped.metadata?.title as string) || title;
-  } catch {
-    // fallback below
-  }
-
-  if (!content || content.length < 100) {
-    const res = await fetch(link.url, { headers: { "User-Agent": "Mozilla/5.0" } });
-    const html = await res.text();
-    content = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 15000);
-    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-    if (titleMatch) title = titleMatch[1];
-  }
-
-  const extraction = await extractWithLLM(buildExtractionPrompt(title, content));
-  const extractedDeadline = parseDeadline(extraction.deadline);
-  const urgency = typeof extraction.urgency_score === "number" ? extraction.urgency_score : link.urgencyScore;
-  const confidence = typeof extraction.confidence_score === "number" ? extraction.confidence_score : link.confidenceScore;
-  const estMinutes =
-    typeof extraction.estimated_completion_minutes === "number"
-      ? extraction.estimated_completion_minutes
-      : link.estimatedCompletionMinutes;
-
-  const updated = await prisma.savedLink.update({
-    where: { id: link.id },
-    data: {
-      title: (typeof extraction.title === "string" && extraction.title) ? extraction.title : title,
-      rawContent: content || link.rawContent,
-      extractedDeadline: extractedDeadline ?? link.extractedDeadline,
-      timezone:
-        typeof extraction.timezone === "string" && extraction.timezone
-          ? normalizeTimezone(extraction.timezone)
-          : link.timezone,
-      category: (typeof extraction.category === "string" && extraction.category) ? extraction.category : link.category,
-      urgencyScore: urgency,
-      confidenceScore: confidence,
-      rollingApplication:
-        typeof extraction.rolling_application === "boolean"
-          ? extraction.rolling_application
-          : link.rollingApplication,
-      estimatedCompletionMinutes: estMinutes,
-      status: "active",
-    },
-  });
-
-  await clearPendingRemindersForLink(link.id);
-  if (updated.extractedDeadline && updated.extractedDeadline.getTime() > Date.now()) {
-    await rebuildRemindersForLink(updated.id);
-  }
-
-  return updated as SavedLink;
+  const extracted = await extractUrlDataWithFallback(link.url, user.timezone);
+  if (!extracted) return link;
+  return updateLinkFromExtraction(link.id, extracted);
 }
 
 async function executeTool(user: User, name: string, args: Record<string, unknown>) {

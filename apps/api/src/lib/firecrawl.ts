@@ -9,6 +9,10 @@ export async function scrapeUrl(url: string) {
     body: JSON.stringify({
       url,
       formats: ["markdown", "html"],
+      onlyMainContent: false,
+      waitFor: 3000,
+      maxAge: 0,
+      timeout: 60000,
     }),
   });
 
