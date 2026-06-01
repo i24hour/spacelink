@@ -1,4 +1,5 @@
 import { createTransport } from "nodemailer";
+import { getFrontendUrl } from "../../lib/frontend-url";
 
 const transporter = createTransport({
   host: process.env.SMTP_HOST || "smtp.gmail.com",
@@ -49,7 +50,7 @@ export function buildEmailTemplate(subject: string, bodyText: string) {
             <td style="padding: 0 32px 32px;">
               <div style="border-top: 1px solid rgba(255,255,255,0.06); padding-top: 20px; font-size: 12px; color: #64748b; line-height: 1.5;">
                 You are receiving this because you saved an opportunity on DeadlineAI.<br />
-                <a href="${process.env.FRONTEND_URL?.replace(/\/$/, "") || "https://spacelink-mocha.vercel.app"}/settings" style="color: #8b5cf6; text-decoration: none;">Manage notifications</a>
+                <a href="${getFrontendUrl()}/settings" style="color: #8b5cf6; text-decoration: none;">Manage notifications</a>
               </div>
             </td>
           </tr>
