@@ -139,6 +139,41 @@ function saysNoDeadline(text: string): boolean {
   );
 }
 
+function wantsSignOut(text: string, cmd: string): boolean {
+  if (cmd === "/signout" || cmd === "/logout" || cmd === "/sign_out") return true;
+  const s = text.trim().toLowerCase();
+  return (
+    /^(please\s+)?(sign|log)\s*(me\s+)?out[!.?\s]*$/.test(s) ||
+    /\b(sign|log)\s*(me\s+)?out\b/.test(s) ||
+    /\bdisconnect(\s+(my\s+)?account|\s+telegram|\s+this\s+chat)?\b/.test(s) ||
+    /\bunlink(\s+(my\s+)?account|\s+telegram)?\b/.test(s)
+  );
+}
+
+async function signOutTelegramUser(
+  chatId: string,
+  user: { id: string; preferredChannels: string[] }
+) {
+  const preferredChannels = user.preferredChannels.filter((c) => c !== "telegram");
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      telegramId: null,
+      preferredChannels: { set: preferredChannels.length > 0 ? preferredChannels : ["email"] },
+    },
+  });
+  pendingDeadlineConfirmations.delete(chatId);
+  lastDeadlineListByChat.delete(chatId);
+}
+
+async function sendTelegramSignInPrompt(chatId: string, connectUrl: string) {
+  await sendTelegramRaw(
+    chatId,
+    `👋 <b>You've been signed out.</b>\n\nTo use DeadlineAI again, sign in here:\n\n<a href="${connectUrl}">👉 Sign in with Google and connect this Telegram chat</a>`,
+    "HTML"
+  );
+}
+
 async function updateLinkDeadlineAndReschedule(linkId: string, deadline: Date) {
   const updated = await prisma.savedLink.update({
     where: { id: linkId },
@@ -358,7 +393,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       }
       await sendTelegramRaw(
         chatId,
-        "✅ <b>You are connected.</b>\n\nYour account is already linked. Paste any opportunity link and I'll track it.\n\n<b>Quick commands:</b>\n/status - Connection status\n/deadlines - Upcoming deadlines\n/help - All commands",
+        "✅ <b>You are connected.</b>\n\nYour account is already linked. Paste any opportunity link and I'll track it.\n\n<b>Quick commands:</b>\n/status - Connection status\n/deadlines - Upcoming deadlines\n/signout - Sign out of this chat\n/help - All commands",
         "HTML"
       );
       return;
@@ -456,9 +491,24 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      `<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href="${getFrontendUrl()}/auth">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/help - This message`,
+      `<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href="${getFrontendUrl()}/auth">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/signout - Sign out of this Telegram chat\n/help - This message`,
       "HTML"
     );
+    return;
+  }
+
+  // /signout — disconnect this Telegram chat from the account
+  if (wantsSignOut(raw, cmd)) {
+    if (!linkedUser) {
+      await sendTelegramRaw(
+        chatId,
+        `You're not signed in on this chat.\n\n<a href="${await connectThisChatUrl()}">👉 Sign in with Google and connect this Telegram chat</a>`,
+        "HTML"
+      );
+      return;
+    }
+    await signOutTelegramUser(chatId, linkedUser);
+    await sendTelegramSignInPrompt(chatId, await connectThisChatUrl());
     return;
   }
 
