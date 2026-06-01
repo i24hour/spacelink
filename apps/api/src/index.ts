@@ -18,7 +18,7 @@ import { linkProcessorWorker } from "./queues/processor";
 import { reminderDispatchWorker } from "./queues/dispatcher";
 import { startCron } from "./cron/reminders";
 import { validateSecretsAtStartup } from "./lib/secrets";
-import { getAllowedFrontendOrigins } from "./lib/frontend-url";
+import { getAllowedFrontendOrigins, getFrontendUrl } from "./lib/frontend-url";
 
 validateSecretsAtStartup();
 
@@ -47,7 +47,9 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/health", (_req, res) =>
+  res.json({ ok: true, frontendUrl: getFrontendUrl() })
+);
 
 app.use("/api/auth", authRouter);
 app.use("/api/webhooks", webhooksRouter);

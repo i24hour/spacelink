@@ -1,6 +1,6 @@
-/** Canonical frontend URL (no trailing slash). Used for CORS, emails, Telegram links. */
+/** Canonical frontend URL (no trailing slash). Set FRONTEND_URL on Render. */
 export function getFrontendUrl(): string {
-  const url = process.env.FRONTEND_URL || process.env.WEB_APP_URL;
+  const url = process.env.FRONTEND_URL;
   if (!url?.trim()) {
     if (process.env.NODE_ENV !== "production") {
       return "http://localhost:3000";
