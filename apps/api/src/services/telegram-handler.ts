@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { buildTelegramSignInUrl } from "../lib/telegram-connect-link";
+import { getFrontendUrl } from "../lib/frontend-url";
 import {
   formatNowInTimezone,
   needsTimezoneSetup,
@@ -339,7 +339,13 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   const cmd = normalizeCommand(raw);
   const detectedUrl = extractUrl(raw);
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
-  const signInUrl = buildTelegramSignInUrl(chatId);
+  const webAppUrl = getFrontendUrl();
+
+  async function connectThisChatUrl(): Promise<string> {
+    const { createTelegramChatLinkToken } = await import("../lib/auth.js");
+    const token = createTelegramChatLinkToken(chatId);
+    return `${webAppUrl}/auth?tgLink=${encodeURIComponent(token)}`;
+  }
 
   // /start deep-link auth
   if (cmd.startsWith("/start")) {
@@ -395,7 +401,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
     await sendTelegramRaw(
       chatId,
-      `👋 <b>Welcome to DeadlineAI!</b>\n\nI track deadlines from any link you paste — hackathons, internships, grants, programs, and more.\n\n<b>Get started:</b>\n1️⃣ <a href="${signInUrl}">Sign in with Google (connect this chat)</a>\n2️⃣ Come back here and paste any link\n3️⃣ I'll extract the deadline and remind you daily\n\n<b>Commands:</b>\n/status - Connection status\n/deadlines - Your upcoming deadlines\n/help - All commands\n\nJust paste a link to start!`,
+      `👋 <b>Welcome to DeadlineAI!</b>\n\nI track deadlines from any link you paste — hackathons, internships, grants, programs, and more.\n\n<b>Get started:</b>\n1️⃣ <a href="${await connectThisChatUrl()}">Sign in with Google (connect this chat)</a>\n2️⃣ Come back here and paste any link\n3️⃣ I'll extract the deadline and remind you daily\n\n<b>Commands:</b>\n/status - Connection status\n/deadlines - Your upcoming deadlines\n/help - All commands\n\nJust paste a link to start!`,
       "HTML"
     );
     return;
@@ -406,7 +412,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     if (!linkedUser) {
       await sendTelegramRaw(
         chatId,
-        `❌ Sign in first.\n\n<a href="${signInUrl}">Connect with Google</a>`,
+        `❌ Sign in first.\n\n<a href="${await connectThisChatUrl()}">Connect with Google</a>`,
         "HTML"
       );
       return;
@@ -434,7 +440,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     }
     await sendTelegramRaw(
       chatId,
-      `❌ <b>Not connected</b>\n\n<a href="${signInUrl}">Sign in with Google and connect this Telegram chat</a>`,
+      `❌ <b>Not connected</b>\n\n<a href="${await connectThisChatUrl()}">Sign in with Google and connect this Telegram chat</a>`,
       "HTML"
     );
     return;
@@ -443,11 +449,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   // /list and /deadlines — card-style list with inline delete buttons
   if (cmd === "/list" || cmd === "/deadlines") {
     if (!linkedUser) {
-      await sendTelegramRaw(
-        chatId,
-        `You need to sign in first.\n\n<a href="${signInUrl}">👉 Sign in with Google and connect this Telegram chat</a>`,
-        "HTML"
-      );
+      await sendTelegramRaw(chatId, `You need to sign in first. Visit ${getFrontendUrl()}/auth`, "HTML");
       return;
     }
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
@@ -458,11 +460,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   // /delete
   if (cmd.startsWith("/delete")) {
     if (!linkedUser) {
-      await sendTelegramRaw(
-        chatId,
-        `You need to sign in first.\n\n<a href="${signInUrl}">👉 Sign in with Google and connect this Telegram chat</a>`,
-        "HTML"
-      );
+      await sendTelegramRaw(chatId, `You need to sign in first. Visit ${getFrontendUrl()}/auth`, "HTML");
       return;
     }
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
@@ -493,7 +491,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd === "/help") {
     await sendTelegramRaw(
       chatId,
-      `<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href="${signInUrl}">👉 Sign in with Google and connect this Telegram chat</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/signout - Sign out of this Telegram chat\n/help - This message`,
+      `<b>DeadlineAI Bot</b>\n\nTrack deadlines from any opportunity link.\n\n<b>Get started:</b>\n<a href="${getFrontendUrl()}/auth">👉 Sign in with Google</a>\n\n<b>How it works:</b>\n1️⃣ Sign in above\n2️⃣ Pick your timezone (IST, PT, PST, …)\n3️⃣ Paste any link here\n4️⃣ AI extracts the deadline in your timezone\n\n<b>Commands:</b>\n/timezone - Set or change timezone\n/list - All tracked links (with delete buttons)\n/deadlines - Same as /list\n/delete &lt;number|title|url&gt; - Delete a tracked link\n/signout - Sign out of this Telegram chat\n/help - This message`,
       "HTML"
     );
     return;
@@ -504,13 +502,13 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     if (!linkedUser) {
       await sendTelegramRaw(
         chatId,
-        `You're not signed in on this chat.\n\n<a href="${signInUrl}">👉 Sign in with Google and connect this Telegram chat</a>`,
+        `You're not signed in on this chat.\n\n<a href="${await connectThisChatUrl()}">👉 Sign in with Google and connect this Telegram chat</a>`,
         "HTML"
       );
       return;
     }
     await signOutTelegramUser(chatId, linkedUser);
-    await sendTelegramSignInPrompt(chatId, signInUrl);
+    await sendTelegramSignInPrompt(chatId, await connectThisChatUrl());
     return;
   }
 
@@ -610,7 +608,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     if (!user) {
       await sendTelegramRaw(
         chatId,
-        `🔐 <b>Please sign in first</b>\n\n<a href="${signInUrl}">👉 Sign in with Google and connect this Telegram chat</a>\n\nThen come back and paste your link!`,
+        `🔐 <b>Please sign in first</b>\n\n<a href="${await connectThisChatUrl()}">👉 Sign in with Google and connect this Telegram chat</a>\n\nThen come back and paste your link!`,
         "HTML"
       );
       return;
@@ -754,7 +752,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
   await sendTelegramRaw(
     chatId,
-    `I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href="${signInUrl}">Sign in with Google and connect this chat</a>\n👉 Use <b>/status</b> to check connection\n👉 Use <b>/help</b> for all commands`,
+    `I didn't understand that.\n\n👉 <b>Paste a link</b> (like istocks.codes) to track a deadline\n👉 <a href="${await connectThisChatUrl()}">Sign in with Google and connect this chat</a>\n👉 Use <b>/status</b> to check connection\n👉 Use <b>/help</b> for all commands`,
     "HTML"
   );
 }
@@ -771,7 +769,13 @@ export async function handleTelegramImageMessage(
   input: TelegramIncomingImage
 ) {
   const linkedUser = await prisma.user.findFirst({ where: { telegramId: chatId } });
-  const signInUrl = buildTelegramSignInUrl(chatId);
+  const webAppUrl = getFrontendUrl();
+
+  async function connectThisChatUrl(): Promise<string> {
+    const { createTelegramChatLinkToken } = await import("../lib/auth.js");
+    const token = createTelegramChatLinkToken(chatId);
+    return `${webAppUrl}/auth?tgLink=${encodeURIComponent(token)}`;
+  }
 
   const caption = input.caption?.trim() || "";
   if (caption && extractUrl(caption)) {
@@ -782,7 +786,7 @@ export async function handleTelegramImageMessage(
   if (!linkedUser) {
     await sendTelegramRaw(
       chatId,
-      `🔐 <b>Please sign in first</b>\n\n<a href="${signInUrl}">👉 Sign in with Google and connect this Telegram chat</a>\n\nThen send your screenshot or poster here!`,
+      `🔐 <b>Please sign in first</b>\n\n<a href="${await connectThisChatUrl()}">👉 Sign in with Google and connect this Telegram chat</a>\n\nThen send your screenshot or poster here!`,
       "HTML"
     );
     return;
