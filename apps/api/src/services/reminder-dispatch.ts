@@ -1,7 +1,8 @@
 import { prisma } from "../lib/prisma";
 import { generateReminderMessage } from "./ai-message";
+import { buildReminderDoneKeyboard } from "./link-completion";
 // import { sendEmail } from "./notifications/email";
-import { sendTelegramRaw } from "./notifications/telegram";
+import { sendTelegramMessage } from "./notifications/telegram";
 import { sendWhatsApp } from "./notifications/whatsapp";
 
 export async function dispatchDueReminder(reminderId: string) {
@@ -41,7 +42,10 @@ export async function dispatchDueReminder(reminderId: string) {
   //   result = await sendEmail(user.email, `Deadline reminder: ${link.title}`, payload.text);
   // } else
   if (reminder.channel === "telegram" && user.telegramId) {
-    result = await sendTelegramRaw(user.telegramId, payload.html, "HTML");
+    result = await sendTelegramMessage(user.telegramId, payload.html, {
+      parseMode: "HTML",
+      replyMarkup: buildReminderDoneKeyboard(link.id),
+    });
   } else if (reminder.channel === "whatsapp" && user.whatsappNumber) {
     result = await sendWhatsApp(user.whatsappNumber, payload.text);
   } else if (reminder.channel === "telegram" && !user.telegramId) {

@@ -5,7 +5,7 @@ import {
   needsTimezoneSetup,
   timezoneLabel,
 } from "../lib/timezones";
-import { answerCallbackQuery, sendTelegramRaw } from "../services/notifications/telegram";
+import { answerCallbackQuery, editTelegramMessage, sendTelegramRaw } from "../services/notifications/telegram";
 import { parseDateFromUserText } from "./deadline-parse";
 import { clearPendingRemindersForLink } from "./reminders-smart";
 import {
@@ -15,6 +15,10 @@ import {
   saveExtractedUrlData,
   updateLinkFromExtraction,
 } from "./extraction-url";
+import {
+  markLinkCompleted,
+  parseLinkDoneCallback,
+} from "./link-completion";
 import {
   applyReminderScheduleChoice,
   activateRemindersForLink,
@@ -262,6 +266,31 @@ export async function handleTelegramCallback(
   if (data === "list:refresh" && messageId) {
     await refreshTrackedLinksListMessage(chatId, messageId, linkedUser.id, linkedUser.timezone);
     await answerCallbackQuery(callbackQueryId, "List updated");
+    return;
+  }
+
+  const doneLinkId = parseLinkDoneCallback(data);
+  if (doneLinkId) {
+    const updated = await markLinkCompleted(doneLinkId, linkedUser.id);
+    if (!updated) {
+      await answerCallbackQuery(callbackQueryId, "Could not find that deadline");
+      return;
+    }
+    await answerCallbackQuery(callbackQueryId, "Marked as done!");
+    if (messageId) {
+      await editTelegramMessage(
+        chatId,
+        messageId,
+        `✅ <b>Completed</b>\n\n<b>${updated.title.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</b>\n\nYou submitted this — reminders stopped and it’s off your active list.`,
+        { parseMode: "HTML" }
+      );
+    } else {
+      await sendTelegramRaw(
+        chatId,
+        `✅ <b>Marked as done:</b> ${updated.title.replace(/&/g, "&amp;").replace(/</g, "&lt;")}`,
+        "HTML"
+      );
+    }
     return;
   }
 
