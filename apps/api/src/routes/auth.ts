@@ -74,11 +74,26 @@ router.post("/telegram-connect", requireAuth, async (req: AuthRequest, res) => {
     const schema = z.object({ token: z.string().min(1) });
     const { token } = schema.parse(req.body);
 
-    const chatId = consumeTelegramChatLinkToken(token);
-    if (!chatId) return res.status(400).json({ error: "Invalid or expired Telegram connect token" });
+    const payload = consumeTelegramChatLinkToken(token);
+    if (!payload) return res.status(400).json({ error: "Invalid or expired Telegram connect token" });
+
+    // If the token was generated from a known user session (e.g. extension/web "Connect
+    // Telegram"), it contains the userId and must match the current session. This prevents
+    // a leaked deep-link token from linking the user's account to another Telegram chat.
+    if (payload.userId && payload.userId !== req.userId) {
+      return res.status(403).json({ error: "Token does not belong to this account" });
+    }
 
     const user = await prisma.user.findUnique({ where: { id: req.userId! } });
     if (!user) return res.status(404).json({ error: "User not found" });
+
+    // Safety check: don't let a chat-only token overwrite an existing link to a different user.
+    const existingChatUser = payload.userId
+      ? null
+      : await prisma.user.findFirst({ where: { telegramId: payload.chatId } });
+    if (existingChatUser && existingChatUser.id !== user.id) {
+      return res.status(409).json({ error: "This Telegram chat is already linked to another account" });
+    }
 
     const preferredChannels = user.preferredChannels.includes("telegram")
       ? user.preferredChannels
@@ -87,7 +102,7 @@ router.post("/telegram-connect", requireAuth, async (req: AuthRequest, res) => {
     await prisma.user.update({
       where: { id: user.id },
       data: {
-        telegramId: chatId,
+        telegramId: payload.chatId,
         preferredChannels: { set: preferredChannels },
       },
     });

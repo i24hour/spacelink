@@ -1,5 +1,9 @@
 import type { SavedLink, User } from "@deadlineai/db";
 import { prisma } from "../lib/prisma";
+import {
+  acquireScheduleLock,
+  releaseScheduleLock,
+} from "../lib/telegram-state";
 import { REMINDER_SCHEDULE_LABELS, type ReminderScheduleMode } from "./reminders-smart";
 import {
   formatNextReminderLine,
@@ -12,8 +16,6 @@ import {
   sendTelegramMessage,
   type InlineKeyboard,
 } from "./notifications/telegram";
-
-const scheduleLocks = new Map<string, Promise<{ ok: boolean; alreadySet?: boolean; silent?: boolean; message: string }>>();
 
 function escapeHtml(text: string): string {
   return text
@@ -113,11 +115,12 @@ export async function applyReminderScheduleChoice(
   options?: { promptMessageId?: number }
 ): Promise<ReminderScheduleChoiceResult> {
   const lockKey = `${linkId}:${mode}`;
-  if (scheduleLocks.has(lockKey)) {
+  const acquired = await acquireScheduleLock(linkId, mode);
+  if (!acquired) {
     return { ok: true as const, alreadySet: true as const, silent: true as const, message: "" };
   }
 
-  const run = async () => {
+  try {
     const link = await prisma.savedLink.findFirst({
       where: { id: linkId, userId },
       include: { user: true },
@@ -145,13 +148,7 @@ export async function applyReminderScheduleChoice(
     }
 
     return { ok: true, message: options?.promptMessageId ? "" : confirmText };
-  };
-
-  const promise = run();
-  scheduleLocks.set(lockKey, promise);
-  try {
-    return await promise;
   } finally {
-    scheduleLocks.delete(lockKey);
+    await releaseScheduleLock(linkId, mode);
   }
 }

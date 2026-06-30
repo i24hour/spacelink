@@ -1,6 +1,15 @@
 import { createTransport } from "nodemailer";
 import { getFrontendUrl } from "../../lib/frontend-url";
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const transporter = createTransport({
   host: process.env.SMTP_HOST || "smtp.gmail.com",
   port: Number(process.env.SMTP_PORT || 587),
@@ -12,12 +21,14 @@ const transporter = createTransport({
 });
 
 export function buildEmailTemplate(subject: string, bodyText: string) {
+  const safeSubject = escapeHtml(subject);
+  const safeBody = escapeHtml(bodyText).replace(/\n/g, "<br/>");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${subject}</title>
+  <title>${safeSubject}</title>
   <style>
     @media only screen and (max-width: 600px) {
       .container { width: 100% !important; padding: 24px !important; }
@@ -36,13 +47,13 @@ export function buildEmailTemplate(subject: string, bodyText: string) {
                 <div style="width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #8b5cf6); display: inline-block;"></div>
                 <span style="font-size: 18px; font-weight: 700; color: #f1f5f9; letter-spacing: -0.5px;">DeadlineAI</span>
               </div>
-              <h1 class="heading" style="font-size: 22px; font-weight: 700; color: #f8fafc; margin: 0 0 12px; line-height: 1.3;">${subject}</h1>
+              <h1 class="heading" style="font-size: 22px; font-weight: 700; color: #f8fafc; margin: 0 0 12px; line-height: 1.3;">${safeSubject}</h1>
             </td>
           </tr>
           <tr>
             <td style="padding: 0 32px 24px;">
               <div style="font-size: 15px; line-height: 1.7; color: #cbd5e1;">
-                ${bodyText.replace(/\n/g, "<br/>")}
+                ${safeBody}
               </div>
             </td>
           </tr>

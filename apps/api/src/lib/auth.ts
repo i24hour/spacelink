@@ -139,10 +139,19 @@ export function consumeTelegramLinkToken(token: string): string | null {
   return consumeSignedTelegramToken(token, "u");
 }
 
-export function createTelegramChatLinkToken(chatId: string): string {
+export function createTelegramChatLinkToken(chatId: string, userId: string): string {
+  return createSignedTelegramToken("c", `${chatId}:${userId}`);
+}
+
+/** Token for an unlinked Telegram chat that a user can claim after signing in. */
+export function createTelegramChatOnlyLinkToken(chatId: string): string {
   return createSignedTelegramToken("c", chatId);
 }
 
-export function consumeTelegramChatLinkToken(token: string): string | null {
-  return consumeSignedTelegramToken(token, "c");
+export function consumeTelegramChatLinkToken(token: string): { chatId: string; userId?: string } | null {
+  const raw = consumeSignedTelegramToken(token, "c");
+  if (!raw) return null;
+  const [chatId, userId] = raw.split(":");
+  if (!chatId) return null;
+  return { chatId, userId };
 }

@@ -1,5 +1,10 @@
+import { assertUrlAllowed } from "./url-security";
+
 export async function scrapeUrl(url: string) {
+  assertUrlAllowed(url);
   const apiKey = process.env.FIRECRAWL_API_KEY || "";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 65000);
   const res = await fetch("https://api.firecrawl.dev/v1/scrape", {
     method: "POST",
     headers: {
@@ -14,7 +19,9 @@ export async function scrapeUrl(url: string) {
       maxAge: 0,
       timeout: 60000,
     }),
+    signal: controller.signal,
   });
+  clearTimeout(timeout);
 
   if (!res.ok) {
     throw new Error(`Firecrawl error: ${res.status}`);

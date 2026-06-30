@@ -13,6 +13,7 @@ import {
   formatDeadlineDate,
   formatDistanceToNow,
 } from "@/lib/utils";
+import { toSafeUrl } from "@deadlineai/shared";
 
 type ProfileLink = {
   id: string;
@@ -185,14 +186,20 @@ export default function ProfilePage() {
             {profile.links.map((link) => (
               <article key={link.id} className="water-card rounded-2xl p-5">
                 <h3 className="font-semibold text-foreground">{link.title}</h3>
-                <a
-                  href={link.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-1 block truncate text-sm text-muted-foreground hover:text-foreground"
-                >
-                  {link.url.replace(/^https?:\/\//, "")}
-                </a>
+                {toSafeUrl(link.url) ? (
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 block truncate text-sm text-muted-foreground hover:text-foreground"
+                  >
+                    {link.url.replace(/^https?:\/\//, "")}
+                  </a>
+                ) : (
+                  <span className="mt-1 block truncate text-sm text-muted-foreground">
+                    {link.url}
+                  </span>
+                )}
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   {link.category && (
                     <Badge variant="outline" className="capitalize text-muted-foreground">

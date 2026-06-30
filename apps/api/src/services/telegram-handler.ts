@@ -32,10 +32,15 @@ import {
 } from "./reminder-engine";
 import { runTelegramAssistant } from "./telegram-assistant";
 import {
-  lastDeadlineListByChat,
+  getLastDeadlineList,
   refreshTrackedLinksListMessage,
   sendTrackedLinksList,
 } from "./telegram-list";
+import {
+  deletePendingDeadlineConfirmation,
+  getPendingDeadlineConfirmation,
+  setPendingDeadlineConfirmation,
+} from "../lib/telegram-state";
 import {
   applyTimezoneChoice,
   parseTimezoneCallback,
@@ -121,13 +126,6 @@ function formatDeadlineInTimezone(date: Date, timezone: string): string {
   }
 }
 
-type PendingDeadlineConfirmation = {
-  linkId: string;
-  awaiting: "manual_date";
-};
-
-const pendingDeadlineConfirmations = new Map<string, PendingDeadlineConfirmation>();
-
 function normalizeCommand(raw: string): string {
   const first = raw.trim().split(/\s+/)[0] || "";
   return first.split("@")[0].toLowerCase();
@@ -167,8 +165,7 @@ async function signOutTelegramUser(
       preferredChannels: { set: preferredChannels.length > 0 ? preferredChannels : ["email"] },
     },
   });
-  pendingDeadlineConfirmations.delete(chatId);
-  lastDeadlineListByChat.delete(chatId);
+  await deletePendingDeadlineConfirmation(chatId);
 }
 
 async function sendTelegramSignInPrompt(chatId: string, connectUrl: string) {
@@ -218,7 +215,7 @@ async function deleteTrackedLink(userId: string, rawQuery: string, chatId: strin
 
   const asNumber = Number.parseInt(query, 10);
   if (Number.isFinite(asNumber) && String(asNumber) === query) {
-    const ids = lastDeadlineListByChat.get(chatId) || [];
+    const ids = await getLastDeadlineList(chatId);
     const idx = asNumber - 1;
     if (idx >= 0 && idx < ids.length) {
       const byId = await prisma.savedLink.findFirst({
@@ -322,7 +319,7 @@ export async function handleTelegramCallback(
 
   if (data.startsWith("del:")) {
     const idx = Number.parseInt(data.slice(4), 10);
-    const ids = lastDeadlineListByChat.get(chatId) || [];
+    const ids = await getLastDeadlineList(chatId);
     const linkId = ids[idx];
 
     if (!linkId) {
@@ -348,7 +345,7 @@ export async function handleTelegramCallback(
     }
 
     await prisma.savedLink.delete({ where: { id: link.id } });
-    pendingDeadlineConfirmations.delete(chatId);
+    await deletePendingDeadlineConfirmation(chatId);
     await answerCallbackQuery(callbackQueryId, `Deleted: ${link.title.slice(0, 40)}`);
 
     if (messageId) {
@@ -361,6 +358,7 @@ export async function handleTelegramCallback(
     } else {
       await sendTrackedLinksList(chatId, linkedUser.id, linkedUser.timezone);
     }
+    return;
   }
 }
 
@@ -372,8 +370,8 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   const webAppUrl = getFrontendUrl();
 
   async function connectThisChatUrl(): Promise<string> {
-    const { createTelegramChatLinkToken } = await import("../lib/auth.js");
-    const token = createTelegramChatLinkToken(chatId);
+    const { createTelegramChatOnlyLinkToken } = await import("../lib/auth.js");
+    const token = createTelegramChatOnlyLinkToken(chatId);
     return `${webAppUrl}/auth?tgLink=${encodeURIComponent(token)}`;
   }
 
@@ -381,7 +379,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (cmd.startsWith("/start")) {
     const token = raw.split(/\s+/)[1];
     if (token) {
-      const { consumeTelegramLinkToken } = await import("../lib/auth.js");
+      const { consumeTelegramLinkToken, createTelegramChatLinkToken } = await import("../lib/auth.js");
       const userId = consumeTelegramLinkToken(token);
       if (userId) {
         const user = await prisma.user.findUnique({ where: { id: userId } });
@@ -390,26 +388,16 @@ export async function handleTelegramMessage(chatId: string, text: string) {
           return;
         }
 
-        const preferredChannels = user.preferredChannels.includes("telegram")
-          ? user.preferredChannels
-          : [...user.preferredChannels, "telegram"];
-
-        await prisma.user.update({
-          where: { id: userId },
-          data: {
-            telegramId: chatId,
-            preferredChannels: { set: preferredChannels },
-          },
-        });
-        const connected = await prisma.user.findUnique({ where: { id: userId } });
+        // Bind the Telegram chat to the account only after the user confirms via the
+        // signed-in web session. This prevents a leaked deep-link token from hijacking
+        // another user's Telegram chat.
+        const chatBoundToken = createTelegramChatLinkToken(chatId, userId);
+        const authUrl = `${webAppUrl}/auth?tgLink=${encodeURIComponent(chatBoundToken)}`;
         await sendTelegramRaw(
           chatId,
-          "🎉 <b>You're connected!</b>\n\nNow just paste any link here and I'll extract deadlines, track them, and remind you.",
+          `🎉 <b>Almost there!</b>\n\nTap the link below while signed in as <code>${user.email.replace(/</g, "&lt;")}</code> to connect this Telegram chat:\n\n<a href="${authUrl}">👉 Confirm and connect this chat</a>\n\nIf you aren't signed in, you'll be asked to sign in with Google first.`,
           "HTML"
         );
-        if (connected && needsTimezoneSetup(connected)) {
-          await sendTimezoneSetupPrompt(chatId);
-        }
         return;
       }
       await sendTelegramRaw(chatId, "That link expired. Open the extension and click Connect Telegram again.", "HTML");
@@ -512,7 +500,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     }
 
     await prisma.savedLink.delete({ where: { id: target.id } });
-    pendingDeadlineConfirmations.delete(chatId);
+    await deletePendingDeadlineConfirmation(chatId);
     await sendTelegramRaw(chatId, `🗑️ Deleted: <b>${target.title}</b>`, "HTML");
     return;
   }
@@ -561,12 +549,12 @@ export async function handleTelegramMessage(chatId: string, text: string) {
   if (linkedUser) {
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
 
-    const pending = pendingDeadlineConfirmations.get(chatId);
+    const pending = await getPendingDeadlineConfirmation(chatId);
     if (pending && !detectedUrl) {
       if (pending.awaiting === "manual_date") {
         if (saysNoDeadline(raw)) {
           await clearLinkDeadlineAndPendingReminders(pending.linkId);
-          pendingDeadlineConfirmations.delete(chatId);
+          await deletePendingDeadlineConfirmation(chatId);
           await sendTelegramRaw(chatId, "✅ Done. Kept this link without any deadline.", "HTML");
           return;
         }
@@ -574,7 +562,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         const parsed = await parseDateFromUserText(raw, linkedUser.timezone);
         if (parsed) {
           const updated = await updateLinkDeadlineAndReschedule(pending.linkId, parsed);
-          pendingDeadlineConfirmations.delete(chatId);
+          await deletePendingDeadlineConfirmation(chatId);
           await activateRemindersForLink(chatId, updated, linkedUser);
           return;
         }
@@ -673,7 +661,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
           });
 
       if (!result.extractedDeadline) {
-        pendingDeadlineConfirmations.set(chatId, {
+        await setPendingDeadlineConfirmation(chatId, {
           linkId: result.id,
           awaiting: "manual_date",
         });
@@ -686,7 +674,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
       }
 
       if (isDeadlinePassed(result.extractedDeadline)) {
-        pendingDeadlineConfirmations.set(chatId, {
+        await setPendingDeadlineConfirmation(chatId, {
           linkId: result.id,
           awaiting: "manual_date",
         });
@@ -780,8 +768,8 @@ export async function handleTelegramImageMessage(
   const webAppUrl = getFrontendUrl();
 
   async function connectThisChatUrl(): Promise<string> {
-    const { createTelegramChatLinkToken } = await import("../lib/auth.js");
-    const token = createTelegramChatLinkToken(chatId);
+    const { createTelegramChatOnlyLinkToken } = await import("../lib/auth.js");
+    const token = createTelegramChatOnlyLinkToken(chatId);
     return `${webAppUrl}/auth?tgLink=${encodeURIComponent(token)}`;
   }
 
@@ -803,8 +791,8 @@ export async function handleTelegramImageMessage(
   if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
 
   await handleTelegramImage(chatId, linkedUser, input, {
-    onManualDateNeeded: (linkId) => {
-      pendingDeadlineConfirmations.set(chatId, {
+    onManualDateNeeded: async (linkId) => {
+      await setPendingDeadlineConfirmation(chatId, {
         linkId,
         awaiting: "manual_date",
       });

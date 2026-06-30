@@ -6,18 +6,34 @@ import { sendTelegramMessage } from "./notifications/telegram";
 import { sendWhatsApp } from "./notifications/whatsapp";
 
 export async function dispatchDueReminder(reminderId: string) {
+  // Atomically claim this reminder so only one instance processes it.
+  const claim = await prisma.reminder.updateMany({
+    where: { id: reminderId, sentStatus: "pending" },
+    data: { sentStatus: "sending" },
+  });
+
+  if (claim.count === 0) {
+    return { skipped: true as const };
+  }
+
   const reminder = await prisma.reminder.findUnique({
     where: { id: reminderId },
     include: { savedLink: true },
   });
 
-  if (!reminder || reminder.sentStatus !== "pending") {
+  if (!reminder) {
     return { skipped: true as const };
   }
 
   const link = reminder.savedLink;
   const user = await prisma.user.findUnique({ where: { id: link.userId } });
-  if (!user) return { skipped: true as const };
+  if (!user) {
+    await prisma.reminder.update({
+      where: { id: reminderId },
+      data: { sentStatus: "failed", aiMessage: "User not found" },
+    });
+    return { skipped: true as const };
+  }
 
   const deadlineTime = link.extractedDeadline?.getTime() || Date.now();
   const minutesUntil = Math.max(0, (deadlineTime - Date.now()) / (1000 * 60));
@@ -34,6 +50,13 @@ export async function dispatchDueReminder(reminderId: string) {
     await prisma.reminder.update({
       where: { id: reminderId },
       data: { sentStatus: "failed", aiMessage: "Email reminders disabled temporarily" },
+    });
+    await prisma.notificationLog.create({
+      data: {
+        reminderId,
+        deliveryStatus: "failed",
+        responseData: { error: "Email reminders disabled temporarily" },
+      },
     });
     return { skipped: true as const, channel: "email" };
   }

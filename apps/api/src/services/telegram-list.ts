@@ -1,13 +1,14 @@
 import type { SavedLink } from "@deadlineai/db";
 import { prisma } from "../lib/prisma";
 import {
+  getLastDeadlineList,
+  setLastDeadlineList,
+} from "../lib/telegram-state";
+import {
   type InlineKeyboard,
   editTelegramMessage,
   sendTelegramMessage,
 } from "./notifications/telegram";
-
-/** Maps Telegram chat → ordered link ids from the last /list or /deadlines message */
-export const lastDeadlineListByChat = new Map<string, string[]>();
 
 function escapeHtml(text: string): string {
   return text
@@ -130,10 +131,7 @@ export async function sendTrackedLinksList(
   timezone: string
 ) {
   const links = await fetchTrackedLinks(userId);
-  lastDeadlineListByChat.set(
-    chatId,
-    links.map((l) => l.id)
-  );
+  await setLastDeadlineList(chatId, links.map((l) => l.id));
 
   const text = buildTrackedLinksListMessage(links, timezone);
   const keyboard = links.length > 0 ? buildDeleteKeyboard(links.length) : undefined;
@@ -151,10 +149,7 @@ export async function refreshTrackedLinksListMessage(
   timezone: string
 ) {
   const links = await fetchTrackedLinks(userId);
-  lastDeadlineListByChat.set(
-    chatId,
-    links.map((l) => l.id)
-  );
+  await setLastDeadlineList(chatId, links.map((l) => l.id));
 
   const text = buildTrackedLinksListMessage(links, timezone);
   const keyboard = links.length > 0 ? buildDeleteKeyboard(links.length) : undefined;
@@ -164,3 +159,5 @@ export async function refreshTrackedLinksListMessage(
     replyMarkup: keyboard,
   });
 }
+
+export { getLastDeadlineList };

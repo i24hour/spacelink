@@ -31,6 +31,9 @@ scripts/db_links_detail.txt
 .vscode/
 .idea/
 
+# TypeScript
+*.tsbuildinfo
+
 # Prisma
 packages/db/prisma/migrations/
 .vercel

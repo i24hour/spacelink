@@ -19,6 +19,7 @@ import {
   getDeadlineUrgency,
   type DeadlineUrgency,
 } from "@/lib/utils";
+import { toSafeUrl } from "@deadlineai/shared";
 
 export type SavedLink = {
   id: string;
@@ -121,15 +122,21 @@ export function DeadlineCard({
             )}
           </div>
 
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1.5 flex cursor-pointer items-center gap-1 truncate text-sm text-muted-foreground transition-colors duration-300 hover:text-foreground"
-          >
-            <span className="truncate">{link.url.replace(/^https?:\/\//, "")}</span>
-            <ArrowUpRight className="h-3.5 w-3.5 shrink-0 opacity-0 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:opacity-100" />
-          </a>
+          {toSafeUrl(link.url) ? (
+            <a
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1.5 flex cursor-pointer items-center gap-1 truncate text-sm text-muted-foreground transition-colors duration-300 hover:text-foreground"
+            >
+              <span className="truncate">{link.url.replace(/^https?:\/\//, "")}</span>
+              <ArrowUpRight className="h-3.5 w-3.5 shrink-0 opacity-0 transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:opacity-100" />
+            </a>
+          ) : (
+            <span className="mt-1.5 flex items-center gap-1 truncate text-sm text-muted-foreground">
+              <span className="truncate">{link.url}</span>
+            </span>
+          )}
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {link.category && (

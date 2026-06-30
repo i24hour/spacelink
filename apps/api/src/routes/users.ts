@@ -49,7 +49,6 @@ router.patch("/me", universalAuth, async (req: AuthRequest, res: any) => {
       timezone: z.string().optional(),
       dailyReminderHour: z.number().int().min(0).max(23).optional(),
       preferredChannels: z.array(z.enum(["email", "telegram", "whatsapp"])).optional(),
-      telegramId: z.string().optional(),
     });
     const data = schema.parse(req.body);
     const update: {
@@ -57,7 +56,6 @@ router.patch("/me", universalAuth, async (req: AuthRequest, res: any) => {
       timezoneConfigured?: boolean;
       dailyReminderHour?: number;
       preferredChannels?: string[];
-      telegramId?: string;
     } = {};
 
     if (data.timezone !== undefined) {
@@ -66,7 +64,7 @@ router.patch("/me", universalAuth, async (req: AuthRequest, res: any) => {
     }
     if (data.dailyReminderHour !== undefined) {
       const withHour = await setUserDailyReminderHour(userId, data.dailyReminderHour);
-      if (data.timezone === undefined && data.preferredChannels === undefined && data.telegramId === undefined) {
+      if (data.timezone === undefined && data.preferredChannels === undefined) {
         return res.json({
           id: withHour.id,
           email: withHour.email,
@@ -86,9 +84,6 @@ router.patch("/me", universalAuth, async (req: AuthRequest, res: any) => {
     }
     if (data.preferredChannels !== undefined) {
       update.preferredChannels = data.preferredChannels;
-    }
-    if (data.telegramId !== undefined) {
-      update.telegramId = data.telegramId;
     }
 
     const updated = await prisma.user.update({

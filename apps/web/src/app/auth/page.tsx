@@ -5,16 +5,25 @@ import { Button } from "@/components/ui/button";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || "";
 const REDIRECT_URI = typeof window !== "undefined" ? `${window.location.origin}/auth` : "";
+const EXTENSION_ID = process.env.NEXT_PUBLIC_EXTENSION_ID || "";
 
-/** Target origin for postMessage — extension passes ?origin=chrome-extension://… */
+/** Allowed postMessage origins. Only the official web origin and (if configured) the
+ *  official Chrome extension ID may receive the Google ID token. */
 function resolvePostMessageTarget(search: URLSearchParams): string {
   const fromQuery = search.get("origin");
+
+  if (fromQuery === window.location.origin) {
+    return fromQuery;
+  }
+
   if (
+    EXTENSION_ID &&
     fromQuery &&
-    (fromQuery.startsWith("chrome-extension://") || fromQuery === window.location.origin)
+    fromQuery === `chrome-extension://${EXTENSION_ID}`
   ) {
     return fromQuery;
   }
+
   return window.location.origin;
 }
 
@@ -143,7 +152,7 @@ export default function AuthPage() {
       return;
     }
     const scope = encodeURIComponent("openid email profile");
-    const nonce = Math.random().toString(36).slice(2);
+    const nonce = crypto.randomUUID();
     const url =
       `https://accounts.google.com/o/oauth2/v2/auth?` +
       `client_id=${GOOGLE_CLIENT_ID}&` +

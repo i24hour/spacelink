@@ -28,3 +28,19 @@ export interface ReminderChannel {
   type: "email" | "whatsapp" | "telegram";
   enabled: boolean;
 }
+
+/** Returns true only for http: or https: URLs with a non-empty hostname. */
+export function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.hostname.length > 0 && (parsed.protocol === "http:" || parsed.protocol === "https:");
+  } catch {
+    return false;
+  }
+}
+
+/** Returns the URL only if it is a safe http(s) link; otherwise returns null. */
+export function toSafeUrl(url: string): string | null {
+  const trimmed = url.trim();
+  return isHttpUrl(trimmed) ? trimmed : null;
+}

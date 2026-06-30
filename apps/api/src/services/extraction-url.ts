@@ -4,6 +4,7 @@ import { scrapeUrl } from "../lib/firecrawl";
 import { extractWithLLM } from "../lib/llm";
 import { normalizeLinkUrl } from "../lib/link-url";
 import { normalizeTimezone } from "../lib/timezones";
+import { assertUrlAllowed, safeFetch } from "../lib/url-security";
 import { clearPendingRemindersForLink } from "./reminders-smart";
 import { rebuildRemindersForLink } from "./reminder-engine";
 import type { SavedLink } from "@deadlineai/db";
@@ -104,6 +105,8 @@ async function readUrlContent(url: string) {
   let content = "";
   let title = url;
 
+  assertUrlAllowed(url);
+
   try {
     const scraped = await scrapeUrl(url);
     content = scraped.markdown || scraped.html || "";
@@ -114,10 +117,13 @@ async function readUrlContent(url: string) {
 
   if (!content || content.length < 100) {
     try {
-      const res = await fetch(url, {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const res = await safeFetch(url, {
         headers: { "User-Agent": "Mozilla/5.0 (compatible; DeadlineAI/1.0)" },
-        redirect: "follow",
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const html = await res.text();
       content = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, CONTENT_CHAR_LIMIT);
       const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
@@ -146,6 +152,7 @@ export async function extractUrlDataWithFallback(
   url: string,
   userTimezone?: string
 ): Promise<UrlExtractionResult | null> {
+  assertUrlAllowed(url);
   const { content, title } = await readUrlContent(url);
 
   if (!content || content.length < 50) return null;

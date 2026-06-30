@@ -10,6 +10,15 @@ const WEB_URL =
   (typeof process !== "undefined" && process.env?.PLASMO_PUBLIC_WEB_URL) ||
   "https://spacelink-mocha.vercel.app";
 
+function isHttpUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url.trim());
+    return parsed.hostname.length > 0 && (parsed.protocol === "http:" || parsed.protocol === "https:");
+  } catch {
+    return false;
+  }
+}
+
 function isAllowedWebAuthOrigin(origin: string): boolean {
   try {
     return origin === new URL(WEB_URL).origin;
@@ -322,7 +331,7 @@ function IndexPopup() {
           {savedLinks.slice(0, 6).map((link) => (
             <a
               key={link.id}
-              href={link.url}
+              href={isHttpUrl(link.url) ? link.url : undefined}
               target="_blank"
               rel="noreferrer"
               className="card"

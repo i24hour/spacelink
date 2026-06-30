@@ -20,7 +20,7 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: GOOGLE_CLIENT_IDS
-        value: "934376870482-jblo2jl6hk9ie2qd8bqeot9fpf0glpj9.apps.googleusercontent.com"
+        sync: false
       - key: FRONTEND_URL
         value: "https://spacelink-mocha.vercel.app"
       - key: LITELLM_PROXY_URL

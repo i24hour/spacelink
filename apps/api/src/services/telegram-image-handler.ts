@@ -52,7 +52,7 @@ export async function handleTelegramImage(
   user: User,
   input: TelegramImageInput,
   options?: {
-    onManualDateNeeded: (linkId: string) => void;
+    onManualDateNeeded: (linkId: string) => void | Promise<void>;
   }
 ) {
   await sendTelegramRaw(chatId, "📷 Reading your image...", "HTML");
@@ -101,7 +101,7 @@ export async function handleTelegramImage(
         });
 
     if (!result.extractedDeadline) {
-      options?.onManualDateNeeded(result.id);
+      await options?.onManualDateNeeded(result.id);
       await sendTelegramRaw(
         chatId,
         `✅ <b>Saved from image</b>, but I couldn't find a clear deadline.\n\n<b>${result.title}</b>\n📅 TBD\n\nSend the date now (example: 20 May 2026 5 PM IST).`,

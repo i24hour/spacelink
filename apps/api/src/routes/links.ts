@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { Prisma } from "@deadlineai/db";
 import { z } from "zod";
+import { isHttpUrl } from "@deadlineai/shared";
 import { prisma } from "../lib/prisma";
 import { universalAuth, AuthRequest } from "../lib/universal-auth";
 import { linkProcessorQueue } from "../queues/processor";
@@ -8,7 +9,9 @@ import { linkProcessorQueue } from "../queues/processor";
 const router = Router();
 
 const createSchema = z.object({
-  url: z.string().url(),
+  url: z.string().url().refine(isHttpUrl, {
+    message: "URL must be http or https",
+  }),
   title: z.string().min(1),
   rawContent: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
