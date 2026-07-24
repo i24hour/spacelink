@@ -7,12 +7,14 @@ import OpenAI from "openai";
  * - Model ID: moonshotai.kimi-k2.5
  * - Base URL: https://bedrock-mantle.{region}.api.aws/v1
  * - Auth: Bedrock long-term API key (Bearer)
+ *   env: BEDROCK_API_KEY or AWS_BEARER_TOKEN_BEDROCK
  *
  * Legacy LITELLM_* env vars are still accepted as fallbacks during migration.
  */
 
 const DEFAULT_MODEL = "moonshotai.kimi-k2.5";
-const DEFAULT_REGION = "us-east-1";
+/** Match Render Ohio by default; override with BEDROCK_REGION. */
+const DEFAULT_REGION = "us-east-2";
 
 function resolveRegion(): string {
   return (
@@ -67,13 +69,42 @@ export function resolveLlmModel(kind: "default" | "vision" | "tools" = "default"
   return (process.env.BEDROCK_MODEL || process.env.LITELLM_MODEL || DEFAULT_MODEL).trim();
 }
 
-const baseURL = resolveBaseURL();
-const apiKey = resolveApiKey();
+type CachedClient = {
+  key: string;
+  baseURL: string;
+  client: OpenAI;
+};
 
-/** OpenAI SDK client pointed at Bedrock Mantle (or legacy LiteLLM proxy). */
-export const llm = new OpenAI({
-  baseURL,
-  apiKey,
+let cachedClient: CachedClient | null = null;
+
+/** Lazily build the OpenAI client so dotenv/env injection after import still works. */
+export function getLlmClient(): OpenAI {
+  const key = resolveApiKey();
+  const baseURL = resolveBaseURL();
+  if (
+    !cachedClient ||
+    cachedClient.key !== key ||
+    cachedClient.baseURL !== baseURL
+  ) {
+    cachedClient = {
+      key,
+      baseURL,
+      client: new OpenAI({ apiKey: key, baseURL }),
+    };
+  }
+  return cachedClient.client;
+}
+
+/**
+ * Drop-in OpenAI client. Resolves credentials on each property access so
+ * process.env can be loaded after this module is imported.
+ */
+export const llm: OpenAI = new Proxy({} as OpenAI, {
+  get(_target, prop, receiver) {
+    const client = getLlmClient();
+    const value = Reflect.get(client as object, prop, receiver);
+    return typeof value === "function" ? value.bind(client) : value;
+  },
 });
 
 /** @deprecated Use `llm` — kept for existing imports during migration. */
@@ -81,6 +112,7 @@ export const litellm = llm;
 
 export function getLlmConfigSummary() {
   const key = resolveApiKey();
+  const baseURL = resolveBaseURL();
   return {
     provider: baseURL.includes("bedrock-mantle")
       ? "amazon-bedrock-mantle"
@@ -99,18 +131,18 @@ export function getLlmConfigSummary() {
   };
 }
 
-function parseJsonContent(raw: string): Record<string, unknown> {
+function parseJsonContent(raw: string): any {
   const trimmed = (raw || "").trim();
   if (!trimmed) return {};
 
   try {
-    return JSON.parse(trimmed) as Record<string, unknown>;
+    return JSON.parse(trimmed);
   } catch {
     // Some models wrap JSON in ```json fences
     const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fenced?.[1]) {
       try {
-        return JSON.parse(fenced[1].trim()) as Record<string, unknown>;
+        return JSON.parse(fenced[1].trim());
       } catch {
         // fall through
       }
@@ -120,7 +152,7 @@ function parseJsonContent(raw: string): Record<string, unknown> {
     const end = trimmed.lastIndexOf("}");
     if (start >= 0 && end > start) {
       try {
-        return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+        return JSON.parse(trimmed.slice(start, end + 1));
       } catch {
         return {};
       }
@@ -129,15 +161,18 @@ function parseJsonContent(raw: string): Record<string, unknown> {
   }
 }
 
-export async function extractWithLLM(prompt: string) {
+export async function extractWithLLM(prompt: string): Promise<any> {
   const model = resolveLlmModel("default");
+  const apiKey = resolveApiKey();
   if (!apiKey) {
-    console.error("LLM extraction skipped: BEDROCK_API_KEY (or legacy LITELLM_API_KEY) is missing");
+    console.error(
+      "LLM extraction skipped: BEDROCK_API_KEY / AWS_BEARER_TOKEN_BEDROCK is missing"
+    );
     return {};
   }
 
   try {
-    const res = await llm.chat.completions.create({
+    const res = await getLlmClient().chat.completions.create({
       model,
       messages: [
         {
@@ -162,15 +197,18 @@ export async function extractWithVisionLLM(
   prompt: string,
   imageBase64: string,
   mimeType: string
-) {
+): Promise<any> {
   const model = resolveLlmModel("vision");
+  const apiKey = resolveApiKey();
   if (!apiKey) {
-    console.error("Vision LLM skipped: BEDROCK_API_KEY (or legacy LITELLM_API_KEY) is missing");
+    console.error(
+      "Vision LLM skipped: BEDROCK_API_KEY / AWS_BEARER_TOKEN_BEDROCK is missing"
+    );
     return {};
   }
 
   try {
-    const res = await llm.chat.completions.create({
+    const res = await getLlmClient().chat.completions.create({
       model,
       messages: [
         {
