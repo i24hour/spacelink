@@ -19,6 +19,7 @@ import { reminderDispatchWorker } from "./queues/dispatcher";
 import { startCron } from "./cron/reminders";
 import { validateSecretsAtStartup } from "./lib/secrets";
 import { getAllowedFrontendOrigins } from "./lib/frontend-url";
+import { extractWithLLM, getLlmConfigSummary } from "./lib/llm";
 
 validateSecretsAtStartup();
 
@@ -48,6 +49,29 @@ app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
+/** LLM config probe (no secrets). Add ?ping=1 to run a tiny Bedrock/Kimi call. */
+app.get("/health/llm", async (req, res) => {
+  const summary = getLlmConfigSummary();
+  if (req.query.ping !== "1") {
+    res.json({ ok: summary.apiKeyConfigured, ...summary });
+    return;
+  }
+
+  try {
+    const result = await extractWithLLM(
+      'Return JSON only: {"ok":true,"provider":"bedrock","model_check":"kimi-k2.5"}'
+    );
+    res.json({
+      ok: Boolean(result && (result as { ok?: unknown }).ok !== false),
+      ...summary,
+      ping: result,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ ok: false, ...summary, error: message });
+  }
+});
 
 app.use("/api/auth", authRouter);
 app.use("/api/webhooks", webhooksRouter);

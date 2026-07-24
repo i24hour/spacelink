@@ -297,7 +297,12 @@ export async function runTelegramAssistant(
   user: User,
   message: string
 ): Promise<TelegramAssistantReply | null> {
-  const model = process.env.LITELLM_TOOL_MODEL || process.env.LITELLM_MODEL || "gpt-4o-mini";
+  const model =
+    process.env.BEDROCK_TOOL_MODEL ||
+    process.env.LITELLM_TOOL_MODEL ||
+    process.env.BEDROCK_MODEL ||
+    process.env.LITELLM_MODEL ||
+    "moonshotai.kimi-k2.5";
   const recentLinks = await prisma.savedLink.findMany({
     where: { userId: user.id, status: { in: ["active", "pending"] } },
     orderBy: [{ extractedDeadline: "asc" }, { updatedAt: "desc" }],
