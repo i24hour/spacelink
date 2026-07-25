@@ -27,6 +27,7 @@ import java.util.concurrent.Executors
 class ScreenCaptureService : Service() {
     private val api = ApiClient()
     private val uploadExecutor = Executors.newSingleThreadExecutor()
+    private lateinit var prefs: AppPrefs
     private lateinit var captureThread: HandlerThread
     private lateinit var captureHandler: Handler
     private var mediaProjection: MediaProjection? = null
@@ -47,6 +48,8 @@ class ScreenCaptureService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        prefs = AppPrefs(this)
+        prefs.monitoringActive = false
         captureThread = HandlerThread("spacelink-screen-capture").also { it.start() }
         captureHandler = Handler(captureThread.looper)
         createNotificationChannel()
@@ -96,6 +99,7 @@ class ScreenCaptureService : Service() {
                 }
             }, captureHandler)
             setupVirtualDisplay()
+            prefs.monitoringActive = true
             captureHandler.removeCallbacks(captureRunnable)
             captureHandler.postDelayed(captureRunnable, FIRST_CAPTURE_DELAY_MS)
         } catch (error: Exception) {
@@ -202,6 +206,7 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        if (::prefs.isInitialized) prefs.monitoringActive = false
         captureHandler.removeCallbacksAndMessages(null)
         virtualDisplay?.release()
         imageReader?.close()

@@ -42,6 +42,13 @@ class MainActivity : Activity() {
         updateControls()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::statusText.isInitialized && prefs.mobileToken != null) {
+            refreshMonitoringStatus()
+        }
+    }
+
     private fun buildView(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -178,8 +185,17 @@ class MainActivity : Activity() {
         }
         pendingGoal = goal
         prefs.intervalMinutes = selectedIntervalMinutes()
-        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
+        try {
+            val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
+                ?: throw IllegalStateException("Android screen-capture service is unavailable")
+            statusText.text = "Waiting for Android screen-capture permission..."
+            startButton.isEnabled = false
+            startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
+        } catch (error: Exception) {
+            updateControls()
+            statusText.text = "Android could not open the screen-capture permission dialog."
+            toast(error.message ?: "Could not request screen capture")
+        }
     }
 
     @Deprecated("Android activity result API retained for broad device compatibility")
@@ -187,6 +203,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_CAPTURE) return
         if (resultCode != RESULT_OK || data == null) {
+            updateControls()
             toast("Screen capture permission was not granted")
             return
         }
@@ -218,7 +235,8 @@ class MainActivity : Activity() {
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 updateControls()
-                statusText.text = "Monitoring active. The first check will run shortly, then every $intervalMinutes minutes."
+                statusText.text = "Starting screen capture. Waiting for the first check..."
+                statusText.postDelayed({ refreshMonitoringStatus() }, 1_500L)
             }
         }
     }
@@ -229,6 +247,7 @@ class MainActivity : Activity() {
             val result = api.stop(token)
             runOnUiThread {
                 stopService(Intent(this, ScreenCaptureService::class.java))
+                prefs.monitoringActive = false
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 statusText.text = if (result.ok) "Monitoring stopped." else result.error ?: "Stop failed"
@@ -258,6 +277,37 @@ class MainActivity : Activity() {
     }
 
     private fun requireToken(): String = prefs.mobileToken ?: error("Pair this phone first")
+
+    private fun refreshMonitoringStatus() {
+        val token = prefs.mobileToken ?: return
+        io.execute {
+            val result = api.status(token)
+            runOnUiThread {
+                if (!result.ok) {
+                    statusText.text = "Paired locally, but the API status could not be checked."
+                    return@runOnUiThread
+                }
+                val session = try {
+                    org.json.JSONObject(result.body).optJSONObject("session")
+                } catch (_: Exception) {
+                    null
+                }
+                val sessionStatus = session?.optString("status").orEmpty()
+                val lastCheck = session?.optString("lastCheckAt").orEmpty()
+                    .replace("T", " ")
+                    .removeSuffix(".000Z")
+                statusText.text = when (sessionStatus) {
+                    "active" -> if (prefs.monitoringActive) {
+                        "Monitoring active. Last check: ${lastCheck.ifBlank { "waiting for first check" }}"
+                    } else {
+                        "API session is active, but screen capture is not running. Tap Start Monitoring again."
+                    }
+                    "paused" -> "Monitoring paused. Tap Resume monitoring to continue."
+                    else -> "Paired. No monitoring session is active."
+                }
+            }
+        }
+    }
 
     private fun sendServiceAction(action: String) {
         startService(Intent(this, ScreenCaptureService::class.java).setAction(action))

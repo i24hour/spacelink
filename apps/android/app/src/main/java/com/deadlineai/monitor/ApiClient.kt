@@ -42,6 +42,7 @@ class ApiClient {
     fun pause(token: String): ApiResult = request("POST", "/api/mobile/pause", token)
     fun resume(token: String): ApiResult = request("POST", "/api/mobile/resume", token)
     fun stop(token: String): ApiResult = request("POST", "/api/mobile/stop", token)
+    fun status(token: String): ApiResult = request("GET", "/api/mobile/status", token)
 
     fun uploadScreenshot(token: String, bitmap: Bitmap, capturedAt: String): ApiResult {
         val output = java.io.ByteArrayOutputStream()
