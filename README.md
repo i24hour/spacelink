@@ -11,7 +11,7 @@ Save any webpage, and DeadlineAI extracts deadlines, scores urgency, and sends s
 ```
 DeadlineAI/
 ├── apps/
-│   ├── api/           # Express + BullMQ + LiteLLM AI pipeline
+│   ├── api/           # Express + BullMQ + Bedrock (Kimi K2.5) AI pipeline
 │   ├── web/           # Next.js 15 SaaS dashboard (shadcn/ui)
 │   └── extension/     # Plasmo browser extension (Google Auth + Telegram)
 ├── packages/
@@ -26,7 +26,7 @@ DeadlineAI/
 - **Dashboard:** Next.js 15, TypeScript, Tailwind CSS, shadcn/ui, Framer Motion
 - **Extension:** Plasmo, React, Google Sign-In, Telegram deep-link connect
 - **API:** Node.js, Express, BullMQ, Upstash Redis
-- **AI:** LiteLLM Proxy (OpenAI-compatible)
+- **AI:** Amazon Bedrock Mantle → Moonshot **Kimi K2.5** (`moonshotai.kimi-k2.5`)
 - **Scraping:** Firecrawl
 - **DB:** PostgreSQL (Supabase)
 - **Queue:** Upstash Redis + BullMQ
@@ -213,7 +213,7 @@ When a link is saved:
 
 1. `POST /api/links` creates a `SavedLink` and enqueues a BullMQ job
 2. The **link-processor worker** enriches with Firecrawl if needed
-3. Page content sent to **LiteLLM Proxy** with JSON-mode prompt
+3. Page content sent to **Amazon Bedrock (Kimi K2.5)** with JSON-mode prompt
 4. Extracted fields stored: deadline, timezone, category, urgency, etc.
 5. **Reminder engine** schedules smart reminders based on urgency:
    - **High (≥7):** 7d, 3d, 1d, 6h, 1h before
@@ -286,20 +286,25 @@ cd apps/api && pnpm build && node dist/index.js
 2. Copy URL to `UPSTASH_REDIS_URL`
 3. BullMQ connects automatically
 
-### LiteLLM
+### Amazon Bedrock (Kimi K2.5)
 
-Use LiteLLM Proxy for cost management:
+The API talks to Bedrock Mantle’s OpenAI-compatible endpoint:
 
-```yaml
-# config.yaml
-model_list:
-  - model_name: gpt-4o-mini
-    litellm_params:
-      model: openai/gpt-4o-mini
-      api_key: os.environ/OPENAI_API_KEY
+```bash
+# apps/api/.env
+BEDROCK_API_KEY="your-bedrock-long-term-api-key"
+BEDROCK_REGION="us-east-2"
+BEDROCK_MODEL="moonshotai.kimi-k2.5"
 ```
 
-Set `LITELLM_MODEL=gpt-4o-mini` in API `.env` for low-cost extraction.
+Create the key in the [Bedrock console](https://console.aws.amazon.com/bedrock/home#/api-keys/long-term/create) and enable **Kimi K2.5** model access in that region.
+
+Smoke-test after deploy:
+
+```bash
+curl "https://deadlineai-api.onrender.com/health/llm"
+curl "https://deadlineai-api.onrender.com/health/llm?ping=1"
+```
 
 ---
 

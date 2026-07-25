@@ -23,12 +23,17 @@ services:
         sync: false
       - key: FRONTEND_URL
         value: "https://spacelink-mocha.vercel.app"
-      - key: LITELLM_PROXY_URL
+      # Amazon Bedrock Mantle → Kimi K2.5 (set BEDROCK_API_KEY in Render dashboard)
+      - key: BEDROCK_API_KEY
         sync: false
-      - key: LITELLM_API_KEY
-        sync: false
-      - key: LITELLM_MODEL
-        value: "DeepSeek-V4-Pro"
+      - key: BEDROCK_REGION
+        value: "us-east-2"
+      - key: BEDROCK_MODEL
+        value: "moonshotai.kimi-k2.5"
+      - key: BEDROCK_VISION_MODEL
+        value: "moonshotai.kimi-k2.5"
+      - key: BEDROCK_TOOL_MODEL
+        value: "moonshotai.kimi-k2.5"
       - key: FIRECRAWL_API_KEY
         sync: false
       - key: SMTP_HOST

@@ -78,7 +78,10 @@ async function generateReminderBody(
   minutesUntilDeadline: number,
   reminderType: string
 ): Promise<string> {
-  const model = process.env.LITELLM_MODEL || "DeepSeek-V4-Pro";
+  const model =
+    process.env.BEDROCK_MODEL ||
+    process.env.LITELLM_MODEL ||
+    "moonshotai.kimi-k2.5";
   const daysAgo = Math.floor((Date.now() - link.createdAt.getTime()) / (1000 * 60 * 60 * 24));
 
   let systemPrompt = "";

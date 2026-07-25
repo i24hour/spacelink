@@ -46,16 +46,22 @@ EMAIL_FROM="DeadlineAI <your-email@gmail.com>"
 2. Generate App Password (16 characters, no spaces)
 3. Use your Gmail address
 
-### 5. LiteLLM Proxy
+### 5. Amazon Bedrock (Kimi K2.5)
 ```
-LITELLM_PROXY_URL="https://your-litellm-proxy.fly.dev/v1"
-LITELLM_API_KEY="sk-your-proxy-key"
-LITELLM_MODEL="gpt-4o-mini"
+BEDROCK_API_KEY="your-bedrock-long-term-api-key"
+BEDROCK_REGION="us-east-2"
+BEDROCK_MODEL="moonshotai.kimi-k2.5"
+BEDROCK_VISION_MODEL="moonshotai.kimi-k2.5"
+BEDROCK_TOOL_MODEL="moonshotai.kimi-k2.5"
 ```
 **How to get:**
-1. Deploy LiteLLM proxy (Fly.io, Railway, or local)
-2. Set master_key in proxy config
-3. Copy proxy URL and key
+1. Open [Amazon Bedrock → API keys](https://console.aws.amazon.com/bedrock/home#/api-keys/long-term/create)
+2. Create a **long-term API key**
+3. Enable model access for **Moonshot AI — Kimi K2.5** (`moonshotai.kimi-k2.5`) in your region
+4. Prefer `us-east-2` (matches Render Ohio) or `us-east-1`
+
+The API uses Bedrock Mantle’s OpenAI-compatible endpoint:  
+`https://bedrock-mantle.{region}.api.aws/v1`
 
 ### 6. Telegram Bot
 ```
@@ -109,9 +115,11 @@ UPSTASH_REDIS_URL="rediss://..."
 JWT_SECRET="..."
 GOOGLE_CLIENT_IDS="..."
 FRONTEND_URL="https://spacelink-mocha.vercel.app"
-LITELLM_PROXY_URL="..."
-LITELLM_API_KEY="..."
-LITELLM_MODEL="gpt-4o-mini"
+BEDROCK_API_KEY="..."
+BEDROCK_REGION="us-east-2"
+BEDROCK_MODEL="moonshotai.kimi-k2.5"
+BEDROCK_VISION_MODEL="moonshotai.kimi-k2.5"
+BEDROCK_TOOL_MODEL="moonshotai.kimi-k2.5"
 FIRECRAWL_API_KEY="..."
 SMTP_HOST="smtp.gmail.com"
 SMTP_PORT="587"

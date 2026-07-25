@@ -124,7 +124,8 @@ async function setManualDeadline(user: User, query: string, deadlineText: string
   if (!parsed) {
     return {
       ok: false,
-      message: 'Could not parse that date. Try "19 May 2026" or "2026-05-19 11:59 PM".',
+      message:
+        "I couldn't find a clear date in that. Say it naturally — e.g. 19 May 2026, tomorrow 5pm, or next Monday.",
     };
   }
 
@@ -297,7 +298,12 @@ export async function runTelegramAssistant(
   user: User,
   message: string
 ): Promise<TelegramAssistantReply | null> {
-  const model = process.env.LITELLM_TOOL_MODEL || process.env.LITELLM_MODEL || "gpt-4o-mini";
+  const model =
+    process.env.BEDROCK_TOOL_MODEL ||
+    process.env.LITELLM_TOOL_MODEL ||
+    process.env.BEDROCK_MODEL ||
+    process.env.LITELLM_MODEL ||
+    "moonshotai.kimi-k2.5";
   const recentLinks = await prisma.savedLink.findMany({
     where: { userId: user.id, status: { in: ["active", "pending"] } },
     orderBy: [{ extractedDeadline: "asc" }, { updatedAt: "desc" }],
