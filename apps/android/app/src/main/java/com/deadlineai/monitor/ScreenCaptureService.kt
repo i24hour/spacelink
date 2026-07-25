@@ -71,6 +71,16 @@ class ScreenCaptureService : Service() {
         captureThread = HandlerThread("spacelink-screen-capture").also { it.start() }
         captureHandler = Handler(captureThread.looper)
         createNotificationChannel()
+        try {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(paused = false),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
+        } catch (error: Throwable) {
+            prefs.recordCrash(error)
+            throw error
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = try {
@@ -131,11 +141,7 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
 
-        startForeground(
-            NOTIFICATION_ID,
-            buildNotification(paused = false),
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-        )
+        updateNotification(paused = false)
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         val projection = manager.getMediaProjection(resultCode, resultData)
             ?: throw IllegalStateException("MediaProjection was not granted")
