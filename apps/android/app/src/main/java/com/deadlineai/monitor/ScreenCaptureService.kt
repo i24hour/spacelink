@@ -36,11 +36,12 @@ class ScreenCaptureService : Service() {
     private var width = 0
     private var height = 0
     private var density = 0
+    private var captureIntervalMs = DEFAULT_CAPTURE_INTERVAL_MS
 
     private val captureRunnable = object : Runnable {
         override fun run() {
             captureFrame()
-            captureHandler.postDelayed(this, CAPTURE_INTERVAL_MS)
+            captureHandler.postDelayed(this, captureIntervalMs)
         }
     }
 
@@ -52,10 +53,28 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_PAUSE -> {
+                captureHandler.removeCallbacks(captureRunnable)
+                return START_NOT_STICKY
+            }
+            ACTION_RESUME -> {
+                if (mediaProjection != null) {
+                    captureHandler.removeCallbacks(captureRunnable)
+                    captureHandler.postDelayed(captureRunnable, captureIntervalMs)
+                }
+                return START_NOT_STICKY
+            }
+        }
         if (mediaProjection != null) return START_NOT_STICKY
         val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
         val resultData = intent?.getParcelableExtra<Intent>(EXTRA_RESULT_DATA)
         token = intent?.getStringExtra(EXTRA_TOKEN)
+        val intervalMinutes = intent?.getIntExtra(
+            EXTRA_INTERVAL_MINUTES,
+            DEFAULT_INTERVAL_MINUTES
+        ) ?: DEFAULT_INTERVAL_MINUTES
+        captureIntervalMs = intervalMinutes.coerceIn(5, 60) * 60_000L
         if (resultCode == -1 || resultData == null || token.isNullOrBlank()) {
             stopSelf()
             return START_NOT_STICKY
@@ -147,7 +166,7 @@ class ScreenCaptureService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("SpaceLink monitoring is active")
-            .setContentText("A focus check will run approximately every hour.")
+            .setContentText("A focus check will run every ${captureIntervalMs / 60_000L} minutes.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setContentIntent(openIntent)
@@ -183,10 +202,14 @@ class ScreenCaptureService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_TOKEN = "mobile_token"
+        const val EXTRA_INTERVAL_MINUTES = "interval_minutes"
+        const val ACTION_PAUSE = "com.deadlineai.monitor.PAUSE"
+        const val ACTION_RESUME = "com.deadlineai.monitor.RESUME"
         private const val TAG = "SpaceLinkCapture"
         private const val CHANNEL_ID = "spacelink_focus_monitoring"
         private const val NOTIFICATION_ID = 4182
         private const val FIRST_CAPTURE_DELAY_MS = 2_000L
-        private const val CAPTURE_INTERVAL_MS = 60 * 60 * 1000L
+        private const val DEFAULT_INTERVAL_MINUTES = 60
+        private const val DEFAULT_CAPTURE_INTERVAL_MS = DEFAULT_INTERVAL_MINUTES * 60_000L
     }
 }

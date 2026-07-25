@@ -8,10 +8,12 @@ import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import java.util.concurrent.Executors
@@ -22,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var api: ApiClient
     private lateinit var pairingCodeInput: EditText
     private lateinit var goalInput: EditText
+    private lateinit var intervalSpinner: Spinner
     private lateinit var statusText: TextView
     private lateinit var pairButton: Button
     private lateinit var startButton: Button
@@ -51,7 +54,7 @@ class MainActivity : Activity() {
         scroll.addView(content)
 
         content.addView(label("SpaceLink Focus Monitor", 26f))
-        content.addView(label("Hourly phone focus checks sent to your connected Telegram chat.", 15f))
+        content.addView(label("Custom phone focus checks sent to your connected Telegram chat.", 15f))
         content.addView(spacer(20))
 
         content.addView(label("1. Pair this phone", 19f))
@@ -76,6 +79,32 @@ class MainActivity : Activity() {
             setText(prefs.goal)
         }
         content.addView(goalInput, fieldParams())
+
+        content.addView(spacer(12))
+        content.addView(label("3. Choose check-in interval", 19f))
+        content.addView(label("Shorter intervals use more battery and LLM credits.", 14f))
+        intervalSpinner = Spinner(this).apply {
+            val values = intervalOptions().map { "$it minutes" }
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_item,
+                values
+            ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
+            setSelection(intervalOptions().indexOf(prefs.intervalMinutes).coerceAtLeast(0))
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+                override fun onItemSelected(
+                    parent: android.widget.AdapterView<*>?,
+                    view: View?,
+                    position: Int,
+                    id: Long
+                ) {
+                    prefs.intervalMinutes = intervalOptions()[position]
+                }
+            }
+        }
+        content.addView(intervalSpinner, fieldParams())
 
         content.addView(spacer(12))
         startButton = Button(this).apply {
@@ -148,6 +177,7 @@ class MainActivity : Activity() {
             return
         }
         pendingGoal = goal
+        prefs.intervalMinutes = selectedIntervalMinutes()
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
     }
@@ -163,7 +193,8 @@ class MainActivity : Activity() {
         prefs.goal = pendingGoal
         setBusy(true)
         io.execute {
-            val result = api.start(requireToken(), pendingGoal)
+            val intervalMinutes = prefs.intervalMinutes
+            val result = api.start(requireToken(), pendingGoal, intervalMinutes)
             runOnUiThread {
                 setBusy(false)
                 if (!result.ok) {
@@ -174,12 +205,13 @@ class MainActivity : Activity() {
                     putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
                     putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
                     putExtra(ScreenCaptureService.EXTRA_TOKEN, requireToken())
+                    putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
                 }
                 androidxStartForegroundService(serviceIntent)
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 updateControls()
-                statusText.text = "Monitoring active. The first check will run shortly, then hourly."
+                statusText.text = "Monitoring active. The first check will run shortly, then every $intervalMinutes minutes."
             }
         }
     }
@@ -206,9 +238,11 @@ class MainActivity : Activity() {
                 setBusy(false)
                 statusText.text = if (result.ok) "Monitoring $name requested." else result.error ?: "Request failed"
                 if (result.ok && name == "pause") {
+                    sendServiceAction(ScreenCaptureService.ACTION_PAUSE)
                     isPaused = true
                     pauseButton.text = "Resume monitoring"
                 } else if (result.ok && name == "resume") {
+                    sendServiceAction(ScreenCaptureService.ACTION_RESUME)
                     isPaused = false
                     pauseButton.text = "Pause monitoring"
                 }
@@ -217,6 +251,17 @@ class MainActivity : Activity() {
     }
 
     private fun requireToken(): String = prefs.mobileToken ?: error("Pair this phone first")
+
+    private fun sendServiceAction(action: String) {
+        startService(Intent(this, ScreenCaptureService::class.java).setAction(action))
+    }
+
+    private fun selectedIntervalMinutes(): Int {
+        if (!::intervalSpinner.isInitialized) return prefs.intervalMinutes
+        return intervalOptions()[intervalSpinner.selectedItemPosition]
+    }
+
+    private fun intervalOptions(): List<Int> = (5..60 step 5).toList()
 
     private fun updateControls() {
         if (!::startButton.isInitialized) return

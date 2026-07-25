@@ -163,7 +163,13 @@ router.post("/start", mobileAuth, async (req: MobileAuthRequest, res) => {
     const data = z
       .object({
         goal: z.string().trim().min(3).max(500),
-        intervalMinutes: z.number().int().min(15).max(24 * 60).optional(),
+        intervalMinutes: z
+          .number()
+          .int()
+          .min(5)
+          .max(60)
+          .refine((value) => value % 5 === 0)
+          .optional(),
       })
       .parse(req.body);
     const userId = req.userId as string;
@@ -182,7 +188,11 @@ router.post("/start", mobileAuth, async (req: MobileAuthRequest, res) => {
     });
     return res.json(mobileStatus(session, device));
   } catch (error) {
-    if (error instanceof z.ZodError) return res.status(400).json({ error: "Goal and interval are invalid" });
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: "Goal is required and interval must be 5, 10, 15 ... 60 minutes",
+      });
+    }
     console.error("mobile start error:", error);
     return res.status(500).json({ error: "Could not start monitoring" });
   }
@@ -300,17 +310,11 @@ router.post(
 
       const user = await prisma.user.findUnique({ where: { id: req.userId as string } });
       let telegramSent = false;
-      if (user?.telegramId) {
-        const suggestion = analysis.suggestion
+      if (user?.telegramId && analysis.classification === "off_track" && !analysis.sensitiveContent) {
+        const intervention = analysis.suggestion
           ? escapeTelegramHtml(analysis.suggestion)
-          : null;
-        const message = analysis.sensitiveContent
-          ? "🔒 <b>Focus check</b>\n\nSensitive content was detected. I did not store or describe the screenshot."
-          : analysis.classification === "productive"
-            ? `✅ <b>Focus check</b>\n\nThis appears aligned with your goal.\n${suggestion || "Keep going."}`
-            : analysis.classification === "off_track"
-              ? `⚠️ <b>Focus check</b>\n\nThis appears unrelated to your goal.\n${suggestion || "Take a moment and return to your planned task."}`
-              : `ℹ️ <b>Focus check</b>\n\nI could not confidently assess this screenshot.\n${suggestion || "Keep your goal in mind for the next block."}`;
+          : "You are drifting away from your goal. Close the distraction and return to the work you said matters.";
+        const message = `⚠️ <b>Focus check</b>\n\n${intervention}`;
         const delivered = await sendTelegramRaw(user.telegramId, message, "HTML");
         telegramSent = delivered.delivered;
         if (telegramSent) {

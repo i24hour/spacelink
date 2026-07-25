@@ -32,7 +32,8 @@ export async function extractWithLLM(prompt: string) {
 export async function extractWithVisionLLM(
   prompt: string,
   imageBase64: string,
-  mimeType: string
+  mimeType: string,
+  systemPrompt = "You are an expert deadline extraction AI reading posters and screenshots. Return valid JSON only."
 ) {
   const model =
     process.env.LITELLM_VISION_MODEL || process.env.LITELLM_MODEL || "gpt-4o";
@@ -42,8 +43,7 @@ export async function extractWithVisionLLM(
       messages: [
         {
           role: "system",
-          content:
-            "You are an expert deadline extraction AI reading posters and screenshots. Return valid JSON only.",
+          content: systemPrompt,
         },
         {
           role: "user",

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add an Android feature that lets a user voluntarily monitor their phone. While monitoring is active, SpaceLink captures approximately one screenshot per hour, sends it to the API for vision analysis, and delivers a short productivity check through the user's connected Telegram account.
+Add an Android feature that lets a user voluntarily monitor their phone. While monitoring is active, SpaceLink captures one screenshot at a user-selected interval from 5 to 60 minutes, sends it to the API for vision analysis, and sends an LLM-generated intervention through the user's connected Telegram account only when the activity appears off-track.
 
 The first release is an Android APK for personal testing. It will not require Play Store publication.
 
@@ -17,7 +17,8 @@ The first release is an Android APK for personal testing. It will not require Pl
 - The system should say that activity "appears productive" or "appears off-track", not make absolute or insulting judgments.
 - The user supplies context, for example: "I am preparing for an exam."
 - Sensitive content should not be described in Telegram messages.
-- Telegram notifications must be rate-limited so the bot cannot spam the user.
+- Productive, unclear, and sensitive-content checks do not send Telegram notifications.
+- Off-track checks may send one fresh LLM-generated intervention per completed check.
 
 ## Proposed Architecture
 
@@ -109,9 +110,9 @@ The package name and application ID will be chosen once before implementation an
 ### Phase 1: Confirm the contract
 
 - Confirm Android-only scope.
-- Confirm hourly cadence and whether a few minutes of Android scheduling drift is acceptable.
+- Support 5-minute increments from 5 minutes through 1 hour; Android scheduling drift is acceptable.
 - Define supported Android versions.
-- Define whether results are sent every hour or only when the activity appears off-track.
+- Send results only when the activity appears off-track.
 - Define quiet hours and low-battery behavior.
 
 ### Phase 2: Add database and API foundations
@@ -167,7 +168,7 @@ Add monitoring commands and messages:
 - `/monitor stop`
 - `/monitor goal`
 
-Use the existing Telegram identity and sender. Add notification deduplication and a cooldown so one screenshot produces at most one user-facing result.
+Use the existing Telegram identity and sender. The LLM generates the intervention text; the API sends at most one message for each screenshot and sends nothing for productive, unclear, or sensitive-content results.
 
 ### Phase 6: Dashboard and privacy controls
 
@@ -206,7 +207,7 @@ Test the following before deployment:
 2. Install it directly on the test phone.
 3. Connect it to the local API or a controlled Render environment.
 4. Test one manual capture first.
-5. Test the hourly flow.
+5. Test 5-minute, 30-minute, and 60-minute flows.
 6. Build a signed release APK after the workflow is stable.
 7. Consider Play Store publication later using an Android App Bundle.
 
@@ -219,7 +220,7 @@ The first implementation is successful when:
 - Android clearly shows that screen capture is active.
 - One screenshot can be captured and uploaded securely.
 - The API returns a valid structured analysis.
-- Telegram receives one useful message.
+- Telegram receives an LLM-generated intervention only for an off-track check.
 - The screenshot is deleted after processing.
 - Permission, network, API, and Telegram failures are visible and recoverable.
 - No existing deadline tracking or Telegram authentication behavior regresses.

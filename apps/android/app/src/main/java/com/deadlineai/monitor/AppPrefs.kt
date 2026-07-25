@@ -13,6 +13,10 @@ class AppPrefs(context: Context) {
         get() = prefs.getString("goal", "") ?: ""
         set(value) = prefs.edit().putString("goal", value).apply()
 
+    var intervalMinutes: Int
+        get() = prefs.getInt("interval_minutes", 60).coerceIn(5, 60)
+        set(value) = prefs.edit().putInt("interval_minutes", value.coerceIn(5, 60)).apply()
+
     fun clearToken() {
         prefs.edit().remove("mobile_token").apply()
     }
