@@ -207,7 +207,14 @@ class MainActivity : Activity() {
                     putExtra(ScreenCaptureService.EXTRA_TOKEN, requireToken())
                     putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
                 }
-                androidxStartForegroundService(serviceIntent)
+                try {
+                    androidxStartForegroundService(serviceIntent)
+                } catch (error: Exception) {
+                    io.execute { api.stop(requireToken()) }
+                    statusText.text = "Could not start screen capture. Check Android permissions and try again."
+                    toast(error.message ?: "Could not start screen capture")
+                    return@runOnUiThread
+                }
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 updateControls()

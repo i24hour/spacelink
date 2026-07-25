@@ -131,27 +131,42 @@ class ScreenCaptureService : Service() {
             captureHandler.postDelayed({ captureFrame() }, 750L)
             return
         }
+        var sourceBitmap: Bitmap? = null
+        var frameBitmap: Bitmap? = null
         try {
             val plane = image.planes.firstOrNull() ?: return
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
             val rowPadding = rowStride - pixelStride * width
             val bufferWidth = width + rowPadding / pixelStride
-            val bitmap = Bitmap.createBitmap(bufferWidth, height, Bitmap.Config.ARGB_8888)
+            sourceBitmap = Bitmap.createBitmap(bufferWidth, height, Bitmap.Config.ARGB_8888)
             val buffer: ByteBuffer = plane.buffer
-            bitmap.copyPixelsFromBuffer(buffer)
-            val cropped = if (bufferWidth == width) bitmap else Bitmap.createBitmap(bitmap, 0, 0, width, height)
-            if (cropped !== bitmap) bitmap.recycle()
+            sourceBitmap.copyPixelsFromBuffer(buffer)
+            frameBitmap = if (bufferWidth == width) {
+                sourceBitmap
+            } else {
+                Bitmap.createBitmap(sourceBitmap, 0, 0, width, height)
+            }
+            if (frameBitmap !== sourceBitmap) {
+                sourceBitmap.recycle()
+                sourceBitmap = null
+            }
             val capturedAt = Instant.now().toString()
             val currentToken = token ?: return
+            val frameToUpload = frameBitmap ?: return
+            frameBitmap = null
             uploadExecutor.execute {
                 try {
-                    val response = api.uploadScreenshot(currentToken, cropped, capturedAt)
+                    val response = api.uploadScreenshot(currentToken, frameToUpload, capturedAt)
                     if (!response.ok) android.util.Log.w(TAG, "Screenshot upload failed: ${response.error}")
                 } finally {
-                    cropped.recycle()
+                    frameToUpload.recycle()
                 }
             }
+        } catch (error: Exception) {
+            android.util.Log.e(TAG, "Could not capture screen frame", error)
+            sourceBitmap?.recycle()
+            frameBitmap?.recycle()
         } finally {
             image.close()
         }
