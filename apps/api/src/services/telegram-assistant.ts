@@ -124,7 +124,8 @@ async function setManualDeadline(user: User, query: string, deadlineText: string
   if (!parsed) {
     return {
       ok: false,
-      message: 'Could not parse that date. Try "19 May 2026" or "2026-05-19 11:59 PM".',
+      message:
+        "I couldn't find a clear date in that. Say it naturally — e.g. 19 May 2026, tomorrow 5pm, or next Monday.",
     };
   }
 

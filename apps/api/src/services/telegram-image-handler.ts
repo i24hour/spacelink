@@ -104,7 +104,7 @@ export async function handleTelegramImage(
       await options?.onManualDateNeeded(result.id);
       await sendTelegramRaw(
         chatId,
-        `✅ <b>Saved from image</b>, but I couldn't find a clear deadline.\n\n<b>${result.title}</b>\n📅 TBD\n\nSend the date now (example: 20 May 2026 5 PM IST).`,
+        `✅ <b>Saved from image</b>, but I couldn't find a clear deadline.\n\n<b>${result.title}</b>\n📅 TBD\n\nJust tell me the date in any words — e.g. <b>25 July 2026</b> or <b>tomorrow 5pm</b>.`,
         "HTML"
       );
       return;

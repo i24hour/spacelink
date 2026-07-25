@@ -569,7 +569,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
 
         await sendTelegramRaw(
           chatId,
-          "I couldn't parse that date. Send a clear date/time (example: 2026-06-30 11:59 PM IST) or type <b>no deadline</b>.",
+          "I didn't catch a date in that message. You can say it naturally — e.g. <b>25 July 2026</b>, <b>tomorrow 5pm</b>, or <b>next Monday night</b>. Or type <b>no deadline</b>.",
           "HTML"
         );
         return;
@@ -667,7 +667,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
         });
         await sendTelegramRaw(
           chatId,
-          `✅ <b>${restarting ? "Updated" : "Saved"}</b>, but I could not find an explicit deadline yet.\n\n<b>${result.title}</b>\n📅 TBD\n\nIf you know the date, send it now (example: 2026-06-30 11:59 PM IST).`,
+          `✅ <b>${restarting ? "Updated" : "Saved"}</b>, but I could not find an explicit deadline yet.\n\n<b>${result.title}</b>\n📅 TBD\n\nJust tell me the date in any words — e.g. <b>25 July 2026</b> or <b>tomorrow 5pm</b>.`,
           "HTML"
         );
         return;
@@ -683,7 +683,7 @@ export async function handleTelegramMessage(chatId: string, text: string) {
           `⚠️ <b>No upcoming deadline found on the page</b>\n\n` +
             `<b>${result.title}</b>\n\n` +
             `I re-crawled the full page but only found past dates or nothing clear. ` +
-            `If you know the correct deadline, send it now (example: 2026-06-30 11:59 PM IST).`,
+            `If you know the correct deadline, just say it naturally — e.g. <b>25 July 2026</b> or <b>next Monday 11pm</b>.`,
           "HTML"
         );
         return;
