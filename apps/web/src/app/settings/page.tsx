@@ -81,6 +81,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testingEmail, setTestingEmail] = useState(false);
   const [testingTelegram, setTestingTelegram] = useState(false);
+  const [pairingCode, setPairingCode] = useState<string | null>(null);
+  const [pairingExpiresAt, setPairingExpiresAt] = useState<string | null>(null);
+  const [creatingPairingCode, setCreatingPairingCode] = useState(false);
   const [testResult, setTestResult] = useState<{ type: string; ok: boolean; msg: string } | null>(null);
 
   const loadSettings = useCallback(async () => {
@@ -280,6 +283,26 @@ export default function SettingsPage() {
       });
     } finally {
       setTestingTelegram(false);
+    }
+  };
+
+  const handleCreatePairingCode = async () => {
+    setCreatingPairingCode(true);
+    setPairingCode(null);
+    setPairingExpiresAt(null);
+    setTestResult(null);
+    try {
+      const result = await fetcher("/api/mobile/pair-code", { method: "POST" });
+      setPairingCode(result.code);
+      setPairingExpiresAt(result.expiresAt);
+    } catch (e: unknown) {
+      setTestResult({
+        type: "mobile",
+        ok: false,
+        msg: e instanceof Error ? e.message : "Could not create Android pairing code",
+      });
+    } finally {
+      setCreatingPairingCode(false);
     }
   };
 
@@ -554,11 +577,43 @@ export default function SettingsPage() {
             </Button>
           </div>
 
-          {user.telegramConnected && (
+      {user.telegramConnected && (
             <p className="text-xs text-muted-foreground">
               The bot also responds to commands. Try <strong>/deadlines</strong> in Telegram to see your upcoming deadlines anytime.
             </p>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Android monitoring Section */}
+      <Card className="glass-card backdrop-blur-md">
+        <CardHeader>
+          <CardTitle className="text-foreground">Android focus monitor</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Pair the SpaceLink Android APK to run voluntary hourly focus checks and receive the result in Telegram.
+            The code expires after 10 minutes and can be used once.
+          </p>
+          {pairingCode && (
+            <div className="rounded-md border border-border bg-muted p-4 text-center">
+              <p className="text-xs text-muted-foreground">Enter this code in the Android app</p>
+              <p className="my-2 font-mono text-3xl font-bold tracking-[0.35em] text-foreground">{pairingCode}</p>
+              {pairingExpiresAt && (
+                <p className="text-xs text-muted-foreground">
+                  Expires {new Date(pairingExpiresAt).toLocaleTimeString()}
+                </p>
+              )}
+            </div>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleCreatePairingCode}
+            disabled={creatingPairingCode}
+          >
+            {creatingPairingCode ? "Creating code..." : "Create Android pairing code"}
+          </Button>
         </CardContent>
       </Card>
 

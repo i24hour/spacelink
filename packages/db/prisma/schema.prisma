@@ -27,8 +27,89 @@ model User {
   savedLinks SavedLink[]
   followers  Follow[] @relation("IncomingFollows")
   following  Follow[] @relation("OutgoingFollows")
+  mobileDevices MobileDevice[]
+  mobilePairingCodes MobilePairingCode[]
+  monitoringSessions MonitoringSession[]
 
   @@map("app_users")
+}
+
+model MobileDevice {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  name       String    @default("Android phone")
+  tokenHash  String    @unique @map("token_hash")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime? @map("last_seen_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  monitoringSessions MonitoringSession[]
+  screenChecks ScreenCheck[]
+
+  @@index([userId])
+  @@index([userId, revokedAt])
+  @@map("mobile_devices")
+}
+
+model MobilePairingCode {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  codeHash  String    @unique @map("code_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime?  @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("mobile_pairing_codes")
+}
+
+model MonitoringSession {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  deviceId      String    @map("device_id")
+  goal          String
+  status        String    @default("active")
+  intervalMins  Int       @default(60) @map("interval_mins")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  pausedAt      DateTime? @map("paused_at")
+  stoppedAt     DateTime? @map("stopped_at")
+  lastCheckAt   DateTime? @map("last_check_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  screenChecks ScreenCheck[]
+
+  @@index([userId, status])
+  @@index([deviceId, status])
+  @@map("monitoring_sessions")
+}
+
+model ScreenCheck {
+  id                String    @id @default(cuid())
+  sessionId         String    @map("session_id")
+  deviceId          String    @map("device_id")
+  capturedAt        DateTime  @map("captured_at")
+  analyzedAt        DateTime  @default(now()) @map("analyzed_at")
+  classification    String
+  confidence        Float?
+  observedActivity  String?   @map("observed_activity")
+  reason            String?
+  suggestion        String?
+  sensitiveContent  Boolean   @default(false) @map("sensitive_content")
+  telegramSentAt    DateTime? @map("telegram_sent_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+
+  session MonitoringSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  device MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, capturedAt])
+  @@index([deviceId, capturedAt])
+  @@map("screen_checks")
 }
 
 model Follow {

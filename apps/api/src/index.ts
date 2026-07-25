@@ -13,6 +13,7 @@ import leaderboardRouter from "./routes/leaderboard";
 import webhooksRouter from "./routes/webhooks";
 import notificationsRouter from "./routes/notifications";
 import telegramWebhookRouter from "./routes/telegram-webhook";
+import mobileMonitoringRouter from "./routes/mobile-monitoring";
 
 import { linkProcessorWorker } from "./queues/processor";
 import { reminderDispatchWorker } from "./queues/dispatcher";
@@ -58,6 +59,7 @@ app.use("/api/users", usersRouter);
 app.use("/api/profile", profileRouter);
 app.use("/api/leaderboard", leaderboardRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/mobile", mobileMonitoringRouter);
 
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);

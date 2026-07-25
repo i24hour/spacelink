@@ -20,10 +20,33 @@ export function generateToken(userId: string) {
   return jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: "7d" });
 }
 
+export function generateMobileToken(userId: string, deviceId: string) {
+  return jwt.sign({ sub: userId, typ: "mobile", deviceId }, JWT_SECRET, {
+    expiresIn: "30d",
+  });
+}
+
 export function verifyToken(token: string): { sub: string } | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { sub: string };
-    return decoded;
+    const decoded = jwt.verify(token, JWT_SECRET) as { sub: string; typ?: string };
+    if (decoded.typ === "mobile") return null;
+    return decoded.sub ? { sub: decoded.sub } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function verifyMobileToken(
+  token: string
+): { sub: string; deviceId: string } | null {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as {
+      sub?: string;
+      typ?: string;
+      deviceId?: string;
+    };
+    if (decoded.typ !== "mobile" || !decoded.sub || !decoded.deviceId) return null;
+    return { sub: decoded.sub, deviceId: decoded.deviceId };
   } catch {
     return null;
   }

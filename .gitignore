@@ -30,6 +30,8 @@ scripts/db_links_detail.txt
 # IDE
 .vscode/
 .idea/
+local.properties
+.gradle/
 
 # TypeScript
 *.tsbuildinfo
