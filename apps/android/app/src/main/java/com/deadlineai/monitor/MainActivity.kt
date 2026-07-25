@@ -32,6 +32,7 @@ class MainActivity : Activity() {
     private lateinit var stopButton: Button
     private var pendingGoal = ""
     private var isPaused = false
+    private var currentSessionStatus = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -204,37 +205,66 @@ class MainActivity : Activity() {
         if (requestCode != REQUEST_CAPTURE) return
         if (resultCode != RESULT_OK || data == null) {
             updateControls()
+            statusText.text = "Screen-capture permission was denied. Monitoring did not start."
             toast("Screen capture permission was not granted")
             return
         }
+        val mobileToken = prefs.mobileToken
+        if (mobileToken == null) {
+            updateControls()
+            toast("Pair this phone first")
+            return
+        }
         prefs.goal = pendingGoal
+        val intervalMinutes = prefs.intervalMinutes
+        val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+            putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+            putExtra(ScreenCaptureService.EXTRA_TOKEN, mobileToken)
+            putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
+        }
+        try {
+            prefs.monitoringError = null
+            androidxStartForegroundService(serviceIntent)
+        } catch (error: Exception) {
+            prefs.monitoringActive = false
+            prefs.monitoringError =
+                "Foreground service failed: ${error.message ?: error.javaClass.simpleName}"
+            updateControls()
+            statusText.text = "Could not start the Android screen-capture service."
+            toast(error.message ?: "Could not start screen capture")
+            return
+        }
+
         setBusy(true)
+        statusText.text = "Screen permission granted. Starting monitoring session..."
         io.execute {
-            val intervalMinutes = prefs.intervalMinutes
-            val result = api.start(requireToken(), pendingGoal, intervalMinutes)
+            val result = api.start(mobileToken, pendingGoal, intervalMinutes)
             runOnUiThread {
                 setBusy(false)
                 if (!result.ok) {
+                    stopService(Intent(this, ScreenCaptureService::class.java))
+                    prefs.monitoringActive = false
+                    prefs.monitoringError = result.error ?: "Could not start API session"
+                    statusText.text = result.error ?: "Could not start monitoring"
                     toast(result.error ?: "Could not start monitoring")
                     return@runOnUiThread
                 }
-                val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
-                    putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
-                    putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
-                    putExtra(ScreenCaptureService.EXTRA_TOKEN, requireToken())
-                    putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
-                }
                 try {
-                    androidxStartForegroundService(serviceIntent)
+                    sendServiceAction(ScreenCaptureService.ACTION_BEGIN_CAPTURES)
                 } catch (error: Exception) {
-                    io.execute { api.stop(requireToken()) }
-                    statusText.text = "Could not start screen capture. Check Android permissions and try again."
+                    stopService(Intent(this, ScreenCaptureService::class.java))
+                    prefs.monitoringActive = false
+                    prefs.monitoringError =
+                        "Capture scheduling failed: ${error.message ?: error.javaClass.simpleName}"
+                    io.execute { api.stop(mobileToken) }
+                    statusText.text = "Screen capture could not begin. Reopen the app for details."
                     toast(error.message ?: "Could not start screen capture")
                     return@runOnUiThread
                 }
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
-                updateControls()
+                applySessionControls("active")
                 statusText.text = "Starting screen capture. Waiting for the first check..."
                 statusText.postDelayed({ refreshMonitoringStatus() }, 1_500L)
             }
@@ -251,7 +281,7 @@ class MainActivity : Activity() {
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 statusText.text = if (result.ok) "Monitoring stopped." else result.error ?: "Stop failed"
-                updateControls()
+                applySessionControls("")
             }
         }
     }
@@ -267,10 +297,12 @@ class MainActivity : Activity() {
                     sendServiceAction(ScreenCaptureService.ACTION_PAUSE)
                     isPaused = true
                     pauseButton.text = "Resume monitoring"
+                    applySessionControls("paused")
                 } else if (result.ok && name == "resume") {
                     sendServiceAction(ScreenCaptureService.ACTION_RESUME)
                     isPaused = false
                     pauseButton.text = "Pause monitoring"
+                    applySessionControls("active")
                 }
             }
         }
@@ -296,14 +328,24 @@ class MainActivity : Activity() {
                 val lastCheck = session?.optString("lastCheckAt").orEmpty()
                     .replace("T", " ")
                     .removeSuffix(".000Z")
+                val lastUpload = prefs.lastUploadAt.orEmpty()
+                    .replace("T", " ")
+                    .removeSuffix(".000Z")
+                val lastKnownCheck = lastCheck.ifBlank { lastUpload }
+                val lastError = prefs.monitoringError
+                isPaused = sessionStatus == "paused"
+                pauseButton.text = if (isPaused) "Resume monitoring" else "Pause monitoring"
+                applySessionControls(sessionStatus)
                 statusText.text = when (sessionStatus) {
                     "active" -> if (prefs.monitoringActive) {
-                        "Monitoring active. Last check: ${lastCheck.ifBlank { "waiting for first check" }}"
+                        "Monitoring active. Last check: ${lastKnownCheck.ifBlank { "waiting for first check" }}"
                     } else {
-                        "API session is active, but screen capture is not running. Tap Start Monitoring again."
+                        "API session is active, but screen capture is not running." +
+                            (lastError?.let { " Last error: $it" } ?: " Tap Start Monitoring again.")
                     }
                     "paused" -> "Monitoring paused. Tap Resume monitoring to continue."
-                    else -> "Paired. No monitoring session is active."
+                    else -> lastError?.let { "Monitoring is stopped. Last error: $it" }
+                        ?: "Paired. No monitoring session is active."
                 }
             }
         }
@@ -320,14 +362,24 @@ class MainActivity : Activity() {
 
     private fun intervalOptions(): List<Int> = (5..60 step 5).toList()
 
+    private fun applySessionControls(sessionStatus: String) {
+        currentSessionStatus = sessionStatus
+        val paired = prefs.mobileToken != null
+        val sessionExists = sessionStatus == "active" || sessionStatus == "paused"
+        val captureServiceRunning = sessionExists && prefs.monitoringActive
+        startButton.isEnabled = paired && !captureServiceRunning
+        pauseButton.isEnabled = paired && captureServiceRunning
+        stopButton.isEnabled = paired && sessionExists
+        goalInput.isEnabled = !captureServiceRunning
+        intervalSpinner.isEnabled = !captureServiceRunning
+    }
+
     private fun updateControls() {
         if (!::startButton.isInitialized) return
         val paired = prefs.mobileToken != null
         pairButton.isEnabled = true
         pairingCodeInput.isEnabled = true
-        startButton.isEnabled = paired
-        pauseButton.isEnabled = paired
-        stopButton.isEnabled = paired
+        applySessionControls(currentSessionStatus)
         statusText.text = if (paired) {
             "Paired. Enter a new code to replace this phone pairing."
         } else {
@@ -339,10 +391,14 @@ class MainActivity : Activity() {
         runOnUiThread {
             pairButton.isEnabled = !busy
             pairingCodeInput.isEnabled = !busy
-            startButton.isEnabled = !busy && prefs.mobileToken != null
-            pauseButton.isEnabled = !busy && prefs.mobileToken != null
-            stopButton.isEnabled = !busy && prefs.mobileToken != null
-            if (busy) statusText.text = "Working..."
+            if (busy) {
+                startButton.isEnabled = false
+                pauseButton.isEnabled = false
+                stopButton.isEnabled = false
+                statusText.text = "Working..."
+            } else {
+                applySessionControls(currentSessionStatus)
+            }
         }
     }
 

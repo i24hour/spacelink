@@ -21,6 +21,14 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean("monitoring_active", false)
         set(value) = prefs.edit().putBoolean("monitoring_active", value).apply()
 
+    var monitoringError: String?
+        get() = prefs.getString("monitoring_error", null)
+        set(value) = prefs.edit().putString("monitoring_error", value).apply()
+
+    var lastUploadAt: String?
+        get() = prefs.getString("last_upload_at", null)
+        set(value) = prefs.edit().putString("last_upload_at", value).apply()
+
     fun clearToken() {
         prefs.edit().remove("mobile_token").apply()
     }
