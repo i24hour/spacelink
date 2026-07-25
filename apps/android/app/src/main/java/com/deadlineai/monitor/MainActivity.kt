@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.view.Gravity
@@ -41,6 +42,9 @@ class MainActivity : Activity() {
         requestNotificationPermissionIfNeeded()
         setContentView(buildView())
         updateControls()
+        prefs.lastCrash?.let {
+            statusText.text = "Previous app crash: $it"
+        }
     }
 
     override fun onResume() {
@@ -191,7 +195,14 @@ class MainActivity : Activity() {
                 ?: throw IllegalStateException("Android screen-capture service is unavailable")
             statusText.text = "Waiting for Android screen-capture permission..."
             startButton.isEnabled = false
-            startActivityForResult(manager.createScreenCaptureIntent(), REQUEST_CAPTURE)
+            val captureIntent = if (android.os.Build.VERSION.SDK_INT >= 34) {
+                manager.createScreenCaptureIntent(
+                    MediaProjectionConfig.createConfigForDefaultDisplay()
+                )
+            } else {
+                manager.createScreenCaptureIntent()
+            }
+            startActivityForResult(captureIntent, REQUEST_CAPTURE)
         } catch (error: Exception) {
             updateControls()
             statusText.text = "Android could not open the screen-capture permission dialog."
@@ -225,6 +236,7 @@ class MainActivity : Activity() {
         }
         try {
             prefs.monitoringError = null
+            prefs.lastCrash = null
             androidxStartForegroundService(serviceIntent)
         } catch (error: Exception) {
             prefs.monitoringActive = false
@@ -333,6 +345,7 @@ class MainActivity : Activity() {
                     .removeSuffix(".000Z")
                 val lastKnownCheck = lastCheck.ifBlank { lastUpload }
                 val lastError = prefs.monitoringError
+                val lastCrash = prefs.lastCrash
                 isPaused = sessionStatus == "paused"
                 pauseButton.text = if (isPaused) "Resume monitoring" else "Pause monitoring"
                 applySessionControls(sessionStatus)
@@ -341,10 +354,13 @@ class MainActivity : Activity() {
                         "Monitoring active. Last check: ${lastKnownCheck.ifBlank { "waiting for first check" }}"
                     } else {
                         "API session is active, but screen capture is not running." +
-                            (lastError?.let { " Last error: $it" } ?: " Tap Start Monitoring again.")
+                            (lastCrash?.let { " Last crash: $it" }
+                                ?: lastError?.let { " Last error: $it" }
+                                ?: " Tap Start Monitoring again.")
                     }
                     "paused" -> "Monitoring paused. Tap Resume monitoring to continue."
-                    else -> lastError?.let { "Monitoring is stopped. Last error: $it" }
+                    else -> lastCrash?.let { "Monitoring is stopped. Last crash: $it" }
+                        ?: lastError?.let { "Monitoring is stopped. Last error: $it" }
                         ?: "Paired. No monitoring session is active."
                 }
             }

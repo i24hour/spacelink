@@ -23,6 +23,8 @@ import android.view.WindowManager
 import java.nio.ByteBuffer
 import java.time.Instant
 import java.util.concurrent.Executors
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 class ScreenCaptureService : Service() {
     private val api = ApiClient()
@@ -39,16 +41,25 @@ class ScreenCaptureService : Service() {
     private var density = 0
     private var captureIntervalMs = DEFAULT_CAPTURE_INTERVAL_MS
     private var capturesEnabled = false
+    private var consecutiveCaptureMisses = 0
 
     private val captureRunnable = object : Runnable {
         override fun run() {
             if (!capturesEnabled) return
-            val captured = captureFrame()
-            if (capturesEnabled) {
-                captureHandler.postDelayed(
-                    this,
-                    if (captured) captureIntervalMs else CAPTURE_RETRY_DELAY_MS
-                )
+            try {
+                val captured = captureFrame()
+                consecutiveCaptureMisses = if (captured) 0 else consecutiveCaptureMisses + 1
+                if (capturesEnabled) {
+                    val nextDelay = if (captured || consecutiveCaptureMisses >= MAX_CAPTURE_RETRIES) {
+                        consecutiveCaptureMisses = 0
+                        captureIntervalMs
+                    } else {
+                        CAPTURE_RETRY_DELAY_MS
+                    }
+                    captureHandler.postDelayed(this, nextDelay)
+                }
+            } catch (error: Throwable) {
+                failAndStop("Capture worker failed", error)
             }
         }
     }
@@ -62,11 +73,19 @@ class ScreenCaptureService : Service() {
         createNotificationChannel()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = try {
+        handleStartCommand(intent)
+    } catch (error: Throwable) {
+        failAndStop("Screen capture service failed", error)
+        START_NOT_STICKY
+    }
+
+    private fun handleStartCommand(intent: Intent?): Int {
         when (intent?.action) {
             ACTION_BEGIN_CAPTURES -> {
                 if (mediaProjection != null) {
                     capturesEnabled = true
+                    consecutiveCaptureMisses = 0
                     captureHandler.removeCallbacks(captureRunnable)
                     captureHandler.postDelayed(captureRunnable, FIRST_CAPTURE_DELAY_MS)
                 } else {
@@ -84,6 +103,7 @@ class ScreenCaptureService : Service() {
             ACTION_RESUME -> {
                 if (mediaProjection != null) {
                     capturesEnabled = true
+                    consecutiveCaptureMisses = 0
                     captureHandler.removeCallbacks(captureRunnable)
                     captureHandler.postDelayed(captureRunnable, captureIntervalMs)
                     updateNotification(paused = false)
@@ -111,29 +131,24 @@ class ScreenCaptureService : Service() {
             return START_NOT_STICKY
         }
 
-        try {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(paused = false),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-            val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            val projection = manager.getMediaProjection(resultCode, resultData)
-                ?: throw IllegalStateException("MediaProjection was not granted")
-            mediaProjection = projection
-            projection.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    stopSelf()
-                }
-            }, captureHandler)
-            setupVirtualDisplay()
-            prefs.monitoringActive = true
-            prefs.monitoringError = null
-        } catch (error: Exception) {
-            android.util.Log.e(TAG, "Could not start screen capture", error)
-            prefs.monitoringError = "Screen capture setup failed: ${error.message ?: error.javaClass.simpleName}"
-            stopSelf()
-        }
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification(paused = false),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        )
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val projection = manager.getMediaProjection(resultCode, resultData)
+            ?: throw IllegalStateException("MediaProjection was not granted")
+        mediaProjection = projection
+        projection.registerCallback(object : MediaProjection.Callback() {
+            override fun onStop() {
+                stopSelf()
+            }
+        }, captureHandler)
+        setupVirtualDisplay()
+        prefs.monitoringActive = true
+        prefs.monitoringError = null
+        prefs.lastCrash = null
         return START_NOT_STICKY
     }
 
@@ -141,9 +156,12 @@ class ScreenCaptureService : Service() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(metrics)
-        width = metrics.widthPixels
-        height = metrics.heightPixels
-        density = metrics.densityDpi
+        val screenWidth = metrics.widthPixels
+        val screenHeight = metrics.heightPixels
+        val captureScale = minOf(1f, MAX_CAPTURE_LONG_EDGE_PX.toFloat() / max(screenWidth, screenHeight))
+        width = (screenWidth * captureScale).roundToInt().coerceAtLeast(1)
+        height = (screenHeight * captureScale).roundToInt().coerceAtLeast(1)
+        density = (metrics.densityDpi * captureScale).roundToInt().coerceAtLeast(1)
         imageReader = ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, 2)
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "SpaceLink Focus",
@@ -194,7 +212,7 @@ class ScreenCaptureService : Service() {
                         prefs.monitoringError = "Screenshot upload failed: $message"
                         android.util.Log.w(TAG, "Screenshot upload failed: $message")
                     }
-                } catch (error: Exception) {
+                } catch (error: Throwable) {
                     prefs.monitoringError =
                         "Screenshot upload failed: ${error.message ?: error.javaClass.simpleName}"
                     android.util.Log.e(TAG, "Screenshot upload failed", error)
@@ -203,12 +221,16 @@ class ScreenCaptureService : Service() {
                 }
             }
             return true
-        } catch (error: Exception) {
+        } catch (error: Throwable) {
             android.util.Log.e(TAG, "Could not capture screen frame", error)
             prefs.monitoringError =
                 "Screen capture failed: ${error.message ?: error.javaClass.simpleName}"
-            sourceBitmap?.recycle()
-            frameBitmap?.recycle()
+            val sourceToRecycle = sourceBitmap
+            val frameToRecycle = frameBitmap
+            if (sourceToRecycle?.isRecycled == false) sourceToRecycle.recycle()
+            if (frameToRecycle !== sourceToRecycle && frameToRecycle?.isRecycled == false) {
+                frameToRecycle.recycle()
+            }
             return false
         } finally {
             image.close()
@@ -244,6 +266,16 @@ class ScreenCaptureService : Service() {
         manager.notify(NOTIFICATION_ID, buildNotification(paused))
     }
 
+    private fun failAndStop(stage: String, error: Throwable) {
+        android.util.Log.e(TAG, stage, error)
+        runCatching {
+            prefs.monitoringError = "$stage: ${error.message ?: error.javaClass.simpleName}"
+            prefs.recordCrash(error)
+        }
+        capturesEnabled = false
+        stopSelf()
+    }
+
     private fun createNotificationChannel() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(
@@ -260,12 +292,12 @@ class ScreenCaptureService : Service() {
     override fun onDestroy() {
         if (::prefs.isInitialized) prefs.monitoringActive = false
         capturesEnabled = false
-        captureHandler.removeCallbacksAndMessages(null)
-        virtualDisplay?.release()
-        imageReader?.close()
-        mediaProjection?.stop()
+        if (::captureHandler.isInitialized) captureHandler.removeCallbacksAndMessages(null)
+        runCatching { virtualDisplay?.release() }
+        runCatching { imageReader?.close() }
+        runCatching { mediaProjection?.stop() }
         uploadExecutor.shutdownNow()
-        captureThread.quitSafely()
+        if (::captureThread.isInitialized) captureThread.quitSafely()
         super.onDestroy()
     }
 
@@ -283,7 +315,9 @@ class ScreenCaptureService : Service() {
         private const val CHANNEL_ID = "spacelink_focus_monitoring"
         private const val NOTIFICATION_ID = 4182
         private const val FIRST_CAPTURE_DELAY_MS = 2_000L
-        private const val CAPTURE_RETRY_DELAY_MS = 750L
+        private const val CAPTURE_RETRY_DELAY_MS = 2_000L
+        private const val MAX_CAPTURE_RETRIES = 3
+        private const val MAX_CAPTURE_LONG_EDGE_PX = 1_600
         private const val DEFAULT_INTERVAL_MINUTES = 60
         private const val DEFAULT_CAPTURE_INTERVAL_MS = DEFAULT_INTERVAL_MINUTES * 60_000L
     }

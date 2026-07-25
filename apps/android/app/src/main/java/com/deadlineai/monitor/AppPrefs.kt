@@ -29,6 +29,26 @@ class AppPrefs(context: Context) {
         get() = prefs.getString("last_upload_at", null)
         set(value) = prefs.edit().putString("last_upload_at", value).apply()
 
+    var lastCrash: String?
+        get() = prefs.getString("last_crash", null)
+        set(value) = prefs.edit().putString("last_crash", value).apply()
+
+    fun recordCrash(throwable: Throwable) {
+        val location = throwable.stackTrace
+            .firstOrNull { it.className.startsWith("com.deadlineai.monitor") }
+            ?.let { "${it.className.substringAfterLast('.')}:${it.lineNumber}" }
+        val summary = buildString {
+            append(throwable.javaClass.simpleName)
+            throwable.message?.takeIf { it.isNotBlank() }?.let { append(": ${it.take(300)}") }
+            location?.let { append(" at $it") }
+            append(" [${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}, Android ${android.os.Build.VERSION.RELEASE}]")
+        }
+        prefs.edit()
+            .putBoolean("monitoring_active", false)
+            .putString("last_crash", summary)
+            .commit()
+    }
+
     fun clearToken() {
         prefs.edit().remove("mobile_token").apply()
     }

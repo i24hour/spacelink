@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
+        android:name=".SpaceLinkApplication"
         android:allowBackup="false"
         android:label="SpaceLink Focus"
         android:supportsRtl="true"
