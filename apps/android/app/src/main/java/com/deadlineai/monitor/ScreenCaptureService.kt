@@ -42,6 +42,8 @@ class ScreenCaptureService : Service() {
     private var captureIntervalMs = DEFAULT_CAPTURE_INTERVAL_MS
     private var capturesEnabled = false
     private var consecutiveCaptureMisses = 0
+    @Volatile
+    private var serviceDestroyed = false
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -92,18 +94,6 @@ class ScreenCaptureService : Service() {
 
     private fun handleStartCommand(intent: Intent?): Int {
         when (intent?.action) {
-            ACTION_BEGIN_CAPTURES -> {
-                if (mediaProjection != null) {
-                    capturesEnabled = true
-                    consecutiveCaptureMisses = 0
-                    captureHandler.removeCallbacks(captureRunnable)
-                    captureHandler.postDelayed(captureRunnable, FIRST_CAPTURE_DELAY_MS)
-                } else {
-                    prefs.monitoringError = "Screen-capture session was not available."
-                    stopSelf()
-                }
-                return START_NOT_STICKY
-            }
             ACTION_PAUSE -> {
                 capturesEnabled = false
                 captureHandler.removeCallbacks(captureRunnable)
@@ -130,12 +120,13 @@ class ScreenCaptureService : Service() {
             intent?.getParcelableExtra(EXTRA_RESULT_DATA)
         }
         token = intent?.getStringExtra(EXTRA_TOKEN)
+        val goal = intent?.getStringExtra(EXTRA_GOAL)?.trim()
         val intervalMinutes = intent?.getIntExtra(
             EXTRA_INTERVAL_MINUTES,
             DEFAULT_INTERVAL_MINUTES
         ) ?: DEFAULT_INTERVAL_MINUTES
         captureIntervalMs = intervalMinutes.coerceIn(5, 60) * 60_000L
-        if (resultCode == -1 || resultData == null || token.isNullOrBlank()) {
+        if (resultCode == -1 || resultData == null || token.isNullOrBlank() || goal.isNullOrBlank()) {
             prefs.monitoringError = "Screen-capture permission data was missing."
             stopSelf()
             return START_NOT_STICKY
@@ -155,7 +146,42 @@ class ScreenCaptureService : Service() {
         prefs.monitoringActive = true
         prefs.monitoringError = null
         prefs.lastCrash = null
+        startApiSessionAndCaptures(token as String, goal, intervalMinutes)
         return START_NOT_STICKY
+    }
+
+    private fun startApiSessionAndCaptures(
+        mobileToken: String,
+        goal: String,
+        intervalMinutes: Int
+    ) {
+        uploadExecutor.execute {
+            val result = try {
+                api.start(mobileToken, goal, intervalMinutes)
+            } catch (error: Throwable) {
+                ApiResult(false, "", error.message ?: error.javaClass.simpleName)
+            }
+            if (serviceDestroyed) return@execute
+            if (!result.ok) {
+                prefs.monitoringActive = false
+                prefs.monitoringError = result.error ?: "Could not start API session"
+                stopSelf()
+                return@execute
+            }
+            captureHandler.post {
+                if (serviceDestroyed || mediaProjection == null) {
+                    prefs.monitoringActive = false
+                    prefs.monitoringError = "Screen sharing ended before monitoring could begin."
+                    uploadExecutor.execute { api.stop(mobileToken) }
+                    stopSelf()
+                    return@post
+                }
+                capturesEnabled = true
+                consecutiveCaptureMisses = 0
+                captureHandler.removeCallbacks(captureRunnable)
+                captureHandler.postDelayed(captureRunnable, FIRST_CAPTURE_DELAY_MS)
+            }
+        }
     }
 
     private fun setupVirtualDisplay() {
@@ -296,6 +322,7 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onDestroy() {
+        serviceDestroyed = true
         if (::prefs.isInitialized) prefs.monitoringActive = false
         capturesEnabled = false
         if (::captureHandler.isInitialized) captureHandler.removeCallbacksAndMessages(null)
@@ -313,8 +340,8 @@ class ScreenCaptureService : Service() {
         const val EXTRA_RESULT_CODE = "result_code"
         const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_TOKEN = "mobile_token"
+        const val EXTRA_GOAL = "monitoring_goal"
         const val EXTRA_INTERVAL_MINUTES = "interval_minutes"
-        const val ACTION_BEGIN_CAPTURES = "com.deadlineai.monitor.BEGIN_CAPTURES"
         const val ACTION_PAUSE = "com.deadlineai.monitor.PAUSE"
         const val ACTION_RESUME = "com.deadlineai.monitor.RESUME"
         private const val TAG = "SpaceLinkCapture"

@@ -232,12 +232,14 @@ class MainActivity : Activity() {
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
             putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
             putExtra(ScreenCaptureService.EXTRA_TOKEN, mobileToken)
+            putExtra(ScreenCaptureService.EXTRA_GOAL, pendingGoal)
             putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
         }
         try {
             prefs.monitoringError = null
             prefs.lastCrash = null
             androidxStartForegroundService(serviceIntent)
+            prefs.monitoringActive = true
         } catch (error: Exception) {
             prefs.monitoringActive = false
             prefs.monitoringError =
@@ -248,39 +250,11 @@ class MainActivity : Activity() {
             return
         }
 
-        setBusy(true)
-        statusText.text = "Screen permission granted. Starting monitoring session..."
-        io.execute {
-            val result = api.start(mobileToken, pendingGoal, intervalMinutes)
-            runOnUiThread {
-                setBusy(false)
-                if (!result.ok) {
-                    stopService(Intent(this, ScreenCaptureService::class.java))
-                    prefs.monitoringActive = false
-                    prefs.monitoringError = result.error ?: "Could not start API session"
-                    statusText.text = result.error ?: "Could not start monitoring"
-                    toast(result.error ?: "Could not start monitoring")
-                    return@runOnUiThread
-                }
-                try {
-                    sendServiceAction(ScreenCaptureService.ACTION_BEGIN_CAPTURES)
-                } catch (error: Exception) {
-                    stopService(Intent(this, ScreenCaptureService::class.java))
-                    prefs.monitoringActive = false
-                    prefs.monitoringError =
-                        "Capture scheduling failed: ${error.message ?: error.javaClass.simpleName}"
-                    io.execute { api.stop(mobileToken) }
-                    statusText.text = "Screen capture could not begin. Reopen the app for details."
-                    toast(error.message ?: "Could not start screen capture")
-                    return@runOnUiThread
-                }
-                isPaused = false
-                pauseButton.text = "Pause monitoring"
-                applySessionControls("active")
-                statusText.text = "Starting screen capture. Waiting for the first check..."
-                statusText.postDelayed({ refreshMonitoringStatus() }, 1_500L)
-            }
-        }
+        isPaused = false
+        pauseButton.text = "Pause monitoring"
+        applySessionControls("active")
+        statusText.text = "Screen permission granted. Starting monitoring and the first check..."
+        statusText.postDelayed({ refreshMonitoringStatus() }, 2_000L)
     }
 
     private fun stopMonitoring() {
