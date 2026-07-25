@@ -266,17 +266,22 @@ class MainActivity : Activity() {
     private fun updateControls() {
         if (!::startButton.isInitialized) return
         val paired = prefs.mobileToken != null
-        pairButton.isEnabled = !paired
-        pairingCodeInput.isEnabled = !paired
+        pairButton.isEnabled = true
+        pairingCodeInput.isEnabled = true
         startButton.isEnabled = paired
         pauseButton.isEnabled = paired
         stopButton.isEnabled = paired
-        if (!paired) statusText.text = "Not paired. Generate a code in SpaceLink Settings."
+        statusText.text = if (paired) {
+            "Paired. Enter a new code to replace this phone pairing."
+        } else {
+            "Not paired. Generate a code in SpaceLink Settings."
+        }
     }
 
     private fun setBusy(busy: Boolean) {
         runOnUiThread {
-            pairButton.isEnabled = !busy && prefs.mobileToken == null
+            pairButton.isEnabled = !busy
+            pairingCodeInput.isEnabled = !busy
             startButton.isEnabled = !busy && prefs.mobileToken != null
             pauseButton.isEnabled = !busy && prefs.mobileToken != null
             stopButton.isEnabled = !busy && prefs.mobileToken != null
