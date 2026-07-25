@@ -60,7 +60,14 @@
 
 @layer utilities {
   .glass-card {
-    @apply border border-border bg-card/70 backdrop-blur-md;
+    /* Desktop: full glass. Mobile: lighter blur so scroll stays smooth. */
+    @apply border border-border bg-card/80 backdrop-blur-sm;
+  }
+
+  @media (min-width: 768px) {
+    .glass-card {
+      @apply bg-card/70 backdrop-blur-md;
+    }
   }
 
   .water-card {
@@ -113,9 +120,14 @@
   }
 }
 
-/* Flowing water background */
+/* Flowing water background — GPU-friendly compositing */
 .water-scene {
   background: hsl(var(--background));
+  /* Own layer so scroll of page content doesn't repaint blobs every frame */
+  transform: translateZ(0);
+  contain: paint;
+  isolation: isolate;
+  backface-visibility: hidden;
 }
 
 .water-blob {
@@ -123,6 +135,17 @@
   border-radius: 50%;
   filter: blur(80px);
   animation: water-drift 22s ease-in-out infinite;
+  will-change: transform;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* While scrolling: freeze motion (look stays, jank drops) */
+.water-scene.is-scrolling .water-blob,
+.water-scene.is-scrolling .water-wave,
+html.water-scrolling .water-blob,
+html.water-scrolling .water-wave {
+  animation-play-state: paused !important;
 }
 
 /* Light mode blobs — soft grey ink in water */
@@ -249,6 +272,32 @@
 
 .dark .water-grain {
   opacity: 0.04;
+}
+
+/* Phones: keep the vibe, cut compositor cost */
+@media (max-width: 767px) {
+  .water-blob {
+    filter: blur(48px);
+  }
+
+  /* Hide the lightest blobs + grain on small screens (still looks watery) */
+  .water-blob-4,
+  .water-grain,
+  .water-wave-2 {
+    display: none;
+  }
+
+  .water-blob-1,
+  .water-blob-2,
+  .water-blob-3 {
+    opacity: 0.45;
+  }
+
+  .dark .water-blob-1,
+  .dark .water-blob-2,
+  .dark .water-blob-3 {
+    opacity: 0.28;
+  }
 }
 
 @keyframes water-drift {

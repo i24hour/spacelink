@@ -69,7 +69,7 @@ export function Navbar() {
       initial={{ y: -20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-      className="sticky top-0 z-40 w-full border-b border-border bg-background/80 backdrop-blur-xl"
+      className="sticky top-0 z-40 w-full border-b border-border bg-background/85 backdrop-blur-md md:bg-background/80 md:backdrop-blur-xl"
     >
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <Link href="/" className="group flex cursor-pointer items-center gap-2.5">

@@ -337,7 +337,7 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <Card className="glass-card backdrop-blur-md">
+      <Card className="glass-card">
         <CardHeader>
           <CardTitle className="text-foreground">Appearance</CardTitle>
         </CardHeader>
@@ -350,7 +350,7 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card className="glass-card backdrop-blur-md">
+      <Card className="glass-card">
         <CardHeader>
           <CardTitle className="text-foreground">Profile</CardTitle>
         </CardHeader>
@@ -429,7 +429,7 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      <Card className="glass-card backdrop-blur-md">
+      <Card className="glass-card">
         <CardHeader>
           <CardTitle className="text-foreground">Notification channels</CardTitle>
         </CardHeader>
@@ -487,7 +487,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Email Section */}
-      <Card className="glass-card backdrop-blur-md">
+      <Card className="glass-card">
         <CardHeader>
           <CardTitle className="text-foreground">Email</CardTitle>
         </CardHeader>
@@ -511,7 +511,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Telegram Section */}
-      <Card className="glass-card backdrop-blur-md">
+      <Card className="glass-card">
         <CardHeader>
           <CardTitle className="text-foreground">Telegram</CardTitle>
         </CardHeader>
@@ -563,7 +563,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Plan Section */}
-      <Card className="glass-card backdrop-blur-md">
+      <Card className="glass-card">
         <CardHeader>
           <CardTitle className="text-foreground">Plan</CardTitle>
         </CardHeader>
