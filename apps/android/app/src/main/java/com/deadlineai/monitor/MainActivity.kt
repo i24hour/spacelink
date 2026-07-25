@@ -233,6 +233,9 @@ class MainActivity : Activity() {
             putExtra(ScreenCaptureService.EXTRA_TOKEN, mobileToken)
             putExtra(ScreenCaptureService.EXTRA_GOAL, pendingGoal)
             putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
+            // RESULT_OK is -1; pass explicitly so the service never treats success as "missing".
+            putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
         }
         try {
             prefs.monitoringError = null

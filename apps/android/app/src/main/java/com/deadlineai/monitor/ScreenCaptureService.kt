@@ -1,5 +1,6 @@
 package com.deadlineai.monitor
 
+import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -14,6 +15,7 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
@@ -111,9 +113,17 @@ class ScreenCaptureService : Service() {
             }
         }
         if (mediaProjection != null) return START_NOT_STICKY
+        // Prefer Intent extras (survives process handoff); fall back to in-memory store.
+        // IMPORTANT: Activity.RESULT_OK is -1 on Android, so never treat -1 as "missing".
         val projectionPermission = ProjectionPermissionStore.take()
-        val resultCode = projectionPermission?.resultCode ?: -1
-        val resultData = projectionPermission?.resultData
+        val hasResultCodeExtra = intent?.hasExtra(EXTRA_RESULT_CODE) == true
+        val resultCode = when {
+            hasResultCodeExtra -> intent!!.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
+            projectionPermission != null -> projectionPermission.resultCode
+            else -> null
+        }
+        val resultData = intent?.let { readResultDataExtra(it) }
+            ?: projectionPermission?.resultData
         token = intent?.getStringExtra(EXTRA_TOKEN)
         val goal = intent?.getStringExtra(EXTRA_GOAL)?.trim()
         val intervalMinutes = intent?.getIntExtra(
@@ -122,8 +132,7 @@ class ScreenCaptureService : Service() {
         ) ?: DEFAULT_INTERVAL_MINUTES
         captureIntervalMs = intervalMinutes.coerceIn(5, 60) * 60_000L
         val missingFields = buildList {
-            if (projectionPermission == null) add("projection permission")
-            if (resultCode == -1) add("result code")
+            if (resultCode == null) add("result code")
             if (resultData == null) add("result data")
             if (token.isNullOrBlank()) add("phone token")
             if (goal.isNullOrBlank()) add("goal")
@@ -133,12 +142,18 @@ class ScreenCaptureService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        if (resultCode != Activity.RESULT_OK) {
+            prefs.monitoringError = "Monitoring could not start; screen-capture permission was not granted."
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        val grantedResultCode = requireNotNull(resultCode)
         val grantedResultData = requireNotNull(resultData)
         val monitoringGoal = requireNotNull(goal)
 
         updateNotification(paused = false)
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val projection = manager.getMediaProjection(resultCode, grantedResultData)
+        val projection = manager.getMediaProjection(grantedResultCode, grantedResultData)
             ?: throw IllegalStateException("MediaProjection was not granted")
         mediaProjection = projection
         projection.registerCallback(object : MediaProjection.Callback() {
@@ -325,6 +340,15 @@ class ScreenCaptureService : Service() {
         )
     }
 
+    @Suppress("DEPRECATION")
+    private fun readResultDataExtra(intent: Intent): Intent? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
+        } else {
+            intent.getParcelableExtra(EXTRA_RESULT_DATA)
+        }
+    }
+
     override fun onDestroy() {
         serviceDestroyed = true
         if (::prefs.isInitialized) prefs.monitoringActive = false
@@ -344,6 +368,8 @@ class ScreenCaptureService : Service() {
         const val EXTRA_TOKEN = "mobile_token"
         const val EXTRA_GOAL = "monitoring_goal"
         const val EXTRA_INTERVAL_MINUTES = "interval_minutes"
+        const val EXTRA_RESULT_CODE = "projection_result_code"
+        const val EXTRA_RESULT_DATA = "projection_result_data"
         const val ACTION_PAUSE = "com.deadlineai.monitor.PAUSE"
         const val ACTION_RESUME = "com.deadlineai.monitor.RESUME"
         private const val TAG = "SpaceLinkCapture"
