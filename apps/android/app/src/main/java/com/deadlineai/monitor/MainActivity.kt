@@ -228,9 +228,8 @@ class MainActivity : Activity() {
         }
         prefs.goal = pendingGoal
         val intervalMinutes = prefs.intervalMinutes
+        ProjectionPermissionStore.put(resultCode, data)
         val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
-            putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
-            putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
             putExtra(ScreenCaptureService.EXTRA_TOKEN, mobileToken)
             putExtra(ScreenCaptureService.EXTRA_GOAL, pendingGoal)
             putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
@@ -241,6 +240,7 @@ class MainActivity : Activity() {
             androidxStartForegroundService(serviceIntent)
             prefs.monitoringActive = true
         } catch (error: Exception) {
+            ProjectionPermissionStore.clear()
             prefs.monitoringActive = false
             prefs.monitoringError =
                 "Foreground service failed: ${error.message ?: error.javaClass.simpleName}"

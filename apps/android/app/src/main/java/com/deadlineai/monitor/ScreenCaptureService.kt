@@ -14,7 +14,6 @@ import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
@@ -112,13 +111,9 @@ class ScreenCaptureService : Service() {
             }
         }
         if (mediaProjection != null) return START_NOT_STICKY
-        val resultCode = intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
-        val resultData = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent?.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent?.getParcelableExtra(EXTRA_RESULT_DATA)
-        }
+        val projectionPermission = ProjectionPermissionStore.take()
+        val resultCode = projectionPermission?.resultCode ?: -1
+        val resultData = projectionPermission?.resultData
         token = intent?.getStringExtra(EXTRA_TOKEN)
         val goal = intent?.getStringExtra(EXTRA_GOAL)?.trim()
         val intervalMinutes = intent?.getIntExtra(
@@ -126,15 +121,24 @@ class ScreenCaptureService : Service() {
             DEFAULT_INTERVAL_MINUTES
         ) ?: DEFAULT_INTERVAL_MINUTES
         captureIntervalMs = intervalMinutes.coerceIn(5, 60) * 60_000L
-        if (resultCode == -1 || resultData == null || token.isNullOrBlank() || goal.isNullOrBlank()) {
-            prefs.monitoringError = "Screen-capture permission data was missing."
+        val missingFields = buildList {
+            if (projectionPermission == null) add("projection permission")
+            if (resultCode == -1) add("result code")
+            if (resultData == null) add("result data")
+            if (token.isNullOrBlank()) add("phone token")
+            if (goal.isNullOrBlank()) add("goal")
+        }
+        if (missingFields.isNotEmpty()) {
+            prefs.monitoringError = "Monitoring could not start; missing ${missingFields.joinToString()}."
             stopSelf()
             return START_NOT_STICKY
         }
+        val grantedResultData = requireNotNull(resultData)
+        val monitoringGoal = requireNotNull(goal)
 
         updateNotification(paused = false)
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val projection = manager.getMediaProjection(resultCode, resultData)
+        val projection = manager.getMediaProjection(resultCode, grantedResultData)
             ?: throw IllegalStateException("MediaProjection was not granted")
         mediaProjection = projection
         projection.registerCallback(object : MediaProjection.Callback() {
@@ -146,7 +150,7 @@ class ScreenCaptureService : Service() {
         prefs.monitoringActive = true
         prefs.monitoringError = null
         prefs.lastCrash = null
-        startApiSessionAndCaptures(token as String, goal, intervalMinutes)
+        startApiSessionAndCaptures(token as String, monitoringGoal, intervalMinutes)
         return START_NOT_STICKY
     }
 
@@ -337,8 +341,6 @@ class ScreenCaptureService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        const val EXTRA_RESULT_CODE = "result_code"
-        const val EXTRA_RESULT_DATA = "result_data"
         const val EXTRA_TOKEN = "mobile_token"
         const val EXTRA_GOAL = "monitoring_goal"
         const val EXTRA_INTERVAL_MINUTES = "interval_minutes"
