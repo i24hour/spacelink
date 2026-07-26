@@ -21,6 +21,16 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean("monitoring_active", false)
         set(value) = prefs.edit().putBoolean("monitoring_active", value).apply()
 
+    /** True when Android stopped capture on lock and we should resume after unlock. */
+    var awaitingResumeAfterLock: Boolean
+        get() = prefs.getBoolean("awaiting_resume_after_lock", false)
+        set(value) = prefs.edit().putBoolean("awaiting_resume_after_lock", value).apply()
+
+    /** User tapped Stop; do not treat MediaProjection end as lock/resume. */
+    var userRequestedStop: Boolean
+        get() = prefs.getBoolean("user_requested_stop", false)
+        set(value) = prefs.edit().putBoolean("user_requested_stop", value).apply()
+
     var monitoringError: String?
         get() = prefs.getString("monitoring_error", null)
         set(value) = prefs.edit().putString("monitoring_error", value).apply()

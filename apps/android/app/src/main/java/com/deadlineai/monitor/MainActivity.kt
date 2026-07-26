@@ -2,11 +2,13 @@ package com.deadlineai.monitor
 
 import android.Manifest
 import android.app.Activity
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
@@ -34,6 +36,8 @@ class MainActivity : Activity() {
     private var pendingGoal = ""
     private var isPaused = false
     private var currentSessionStatus = ""
+    private var capturePromptInFlight = false
+    private var suppressAutoResumeUntilElapsed = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +49,13 @@ class MainActivity : Activity() {
         prefs.lastCrash?.let {
             statusText.text = "Previous app crash: $it"
         }
+        maybeAutoResumeCapture(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        maybeAutoResumeCapture(intent)
     }
 
     override fun onResume() {
@@ -52,6 +63,7 @@ class MainActivity : Activity() {
         if (::statusText.isInitialized && prefs.mobileToken != null) {
             refreshMonitoringStatus()
         }
+        maybeAutoResumeCapture(intent)
     }
 
     private fun buildView(): View {
@@ -145,7 +157,12 @@ class MainActivity : Activity() {
         statusText.setPadding(0, 20, 0, 0)
         content.addView(statusText)
         content.addView(spacer(16))
-        content.addView(label("Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android will show a visible screen-capture notification while monitoring is active.", 13f))
+        content.addView(
+            label(
+                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked; after unlock, SpaceLink will ask you to allow capture again to continue.",
+                13f
+            )
+        )
 
         root.addView(scroll, LinearLayout.LayoutParams(-1, -1))
         return root
@@ -177,9 +194,44 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requestScreenCapture() {
+    private fun maybeAutoResumeCapture(intent: Intent?) {
+        if (!::prefs.isInitialized || !::statusText.isInitialized) return
+        if (capturePromptInFlight || prefs.monitoringActive) return
+        val requested = intent?.getBooleanExtra(
+            UnlockResumeCoordinator.EXTRA_AUTO_RESUME_CAPTURE,
+            false
+        ) == true
+        if (requested) {
+            intent?.removeExtra(UnlockResumeCoordinator.EXTRA_AUTO_RESUME_CAPTURE)
+        }
+        if (!requested && !prefs.awaitingResumeAfterLock) return
+        if (!requested && SystemClock.elapsedRealtime() < suppressAutoResumeUntilElapsed) {
+            statusText.text =
+                "Screen was locked. Tap Continue monitoring and allow screen capture to resume."
+            return
+        }
+        if (isKeyguardLocked()) {
+            statusText.text =
+                "Screen was locked. Unlock your phone — SpaceLink will ask to continue monitoring."
+            return
+        }
+        if (prefs.mobileToken == null) return
+        val goal = goalInput.text.toString().trim().ifBlank { prefs.goal.trim() }
+        if (goal.length < 3) {
+            statusText.text = "Saved goal missing. Enter a goal, then tap Start monitoring."
+            return
+        }
+        if (::goalInput.isInitialized && goalInput.text.toString().trim().isEmpty()) {
+            goalInput.setText(prefs.goal)
+        }
+        statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
+        requestScreenCapture(autoResume = true)
+    }
+
+    private fun requestScreenCapture(autoResume: Boolean = false) {
+        if (capturePromptInFlight) return
         val token = prefs.mobileToken
-        val goal = goalInput.text.toString().trim()
+        val goal = goalInput.text.toString().trim().ifBlank { prefs.goal.trim() }
         if (token == null) {
             toast("Pair this phone first")
             return
@@ -189,12 +241,18 @@ class MainActivity : Activity() {
             return
         }
         pendingGoal = goal
+        prefs.goal = goal
         prefs.intervalMinutes = selectedIntervalMinutes()
         try {
             val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
                 ?: throw IllegalStateException("Android screen-capture service is unavailable")
-            statusText.text = "Waiting for Android screen-capture permission..."
+            statusText.text = if (autoResume) {
+                "Phone unlocked. Waiting for Android screen-capture permission..."
+            } else {
+                "Waiting for Android screen-capture permission..."
+            }
             startButton.isEnabled = false
+            capturePromptInFlight = true
             val captureIntent = if (android.os.Build.VERSION.SDK_INT >= 34) {
                 manager.createScreenCaptureIntent(
                     MediaProjectionConfig.createConfigForDefaultDisplay()
@@ -204,6 +262,7 @@ class MainActivity : Activity() {
             }
             startActivityForResult(captureIntent, REQUEST_CAPTURE)
         } catch (error: Exception) {
+            capturePromptInFlight = false
             updateControls()
             statusText.text = "Android could not open the screen-capture permission dialog."
             toast(error.message ?: "Could not request screen capture")
@@ -214,9 +273,17 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_CAPTURE) return
+        capturePromptInFlight = false
         if (resultCode != RESULT_OK || data == null) {
             updateControls()
-            statusText.text = "Screen-capture permission was denied. Monitoring did not start."
+            if (prefs.awaitingResumeAfterLock || pendingGoal.isNotBlank()) {
+                UnlockResumeCoordinator.markAwaitingResume(this)
+                suppressAutoResumeUntilElapsed = SystemClock.elapsedRealtime() + 60_000L
+                statusText.text =
+                    "Screen-capture permission was denied. Tap Continue monitoring to try again."
+            } else {
+                statusText.text = "Screen-capture permission was denied. Monitoring did not start."
+            }
             toast("Screen capture permission was not granted")
             return
         }
@@ -228,6 +295,7 @@ class MainActivity : Activity() {
         }
         prefs.goal = pendingGoal
         val intervalMinutes = prefs.intervalMinutes
+        val reattach = prefs.awaitingResumeAfterLock
         ProjectionPermissionStore.put(resultCode, data)
         val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
             putExtra(ScreenCaptureService.EXTRA_TOKEN, mobileToken)
@@ -236,12 +304,15 @@ class MainActivity : Activity() {
             // RESULT_OK is -1; pass explicitly so the service never treats success as "missing".
             putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
             putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+            putExtra(ScreenCaptureService.EXTRA_REATTACH_SESSION, reattach)
         }
         try {
+            prefs.userRequestedStop = false
             prefs.monitoringError = null
             prefs.lastCrash = null
             androidxStartForegroundService(serviceIntent)
             prefs.monitoringActive = true
+            UnlockResumeCoordinator.clearAwaitingResume(this)
         } catch (error: Exception) {
             ProjectionPermissionStore.clear()
             prefs.monitoringActive = false
@@ -256,17 +327,28 @@ class MainActivity : Activity() {
         isPaused = false
         pauseButton.text = "Pause monitoring"
         applySessionControls("active")
-        statusText.text = "Screen permission granted. Starting monitoring and the first check..."
+        statusText.text = if (reattach) {
+            "Screen permission granted again. Continuing monitoring..."
+        } else {
+            "Screen permission granted. Starting monitoring and the first check..."
+        }
         statusText.postDelayed({ refreshMonitoringStatus() }, 2_000L)
     }
 
     private fun stopMonitoring() {
         val token = prefs.mobileToken ?: return
+        prefs.userRequestedStop = true
+        UnlockResumeCoordinator.clearAwaitingResume(this)
+        startService(
+            Intent(this, ScreenCaptureService::class.java)
+                .setAction(ScreenCaptureService.ACTION_CANCEL_AND_STOP)
+        )
         io.execute {
             val result = api.stop(token)
             runOnUiThread {
                 stopService(Intent(this, ScreenCaptureService::class.java))
                 prefs.monitoringActive = false
+                prefs.awaitingResumeAfterLock = false
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 statusText.text = if (result.ok) "Monitoring stopped." else result.error ?: "Stop failed"
@@ -326,16 +408,18 @@ class MainActivity : Activity() {
                 isPaused = sessionStatus == "paused"
                 pauseButton.text = if (isPaused) "Resume monitoring" else "Pause monitoring"
                 applySessionControls(sessionStatus)
-                statusText.text = when (sessionStatus) {
-                    "active" -> if (prefs.monitoringActive) {
+                statusText.text = when {
+                    prefs.awaitingResumeAfterLock ->
+                        "Screen was locked, so Android stopped capture. Unlock and allow screen sharing to continue."
+                    sessionStatus == "active" && prefs.monitoringActive ->
                         "Monitoring active. Last check: ${lastKnownCheck.ifBlank { "waiting for first check" }}"
-                    } else {
+                    sessionStatus == "active" ->
                         "API session is active, but screen capture is not running." +
                             (lastCrash?.let { " Last crash: $it" }
                                 ?: lastError?.let { " Last error: $it" }
                                 ?: " Tap Start Monitoring again.")
-                    }
-                    "paused" -> "Monitoring paused. Tap Resume monitoring to continue."
+                    sessionStatus == "paused" ->
+                        "Monitoring paused. Tap Resume monitoring to continue."
                     else -> lastCrash?.let { "Monitoring is stopped. Last crash: $it" }
                         ?: lastError?.let { "Monitoring is stopped. Last error: $it" }
                         ?: "Paired. No monitoring session is active."
@@ -358,13 +442,25 @@ class MainActivity : Activity() {
     private fun applySessionControls(sessionStatus: String) {
         currentSessionStatus = sessionStatus
         val paired = prefs.mobileToken != null
-        val sessionExists = sessionStatus == "active" || sessionStatus == "paused"
+        val sessionExists = sessionStatus == "active" ||
+            sessionStatus == "paused" ||
+            prefs.awaitingResumeAfterLock
         val captureServiceRunning = sessionExists && prefs.monitoringActive
         startButton.isEnabled = paired && !captureServiceRunning
+        startButton.text = if (prefs.awaitingResumeAfterLock && !captureServiceRunning) {
+            "Continue monitoring"
+        } else {
+            "Start monitoring"
+        }
         pauseButton.isEnabled = paired && captureServiceRunning
         stopButton.isEnabled = paired && sessionExists
         goalInput.isEnabled = !captureServiceRunning
         intervalSpinner.isEnabled = !captureServiceRunning
+    }
+
+    private fun isKeyguardLocked(): Boolean {
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        return keyguard.isKeyguardLocked
     }
 
     private fun updateControls() {

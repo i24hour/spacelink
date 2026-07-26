@@ -43,8 +43,13 @@ class ScreenCaptureService : Service() {
     private var captureIntervalMs = DEFAULT_CAPTURE_INTERVAL_MS
     private var capturesEnabled = false
     private var consecutiveCaptureMisses = 0
+    private var intervalMinutes = DEFAULT_INTERVAL_MINUTES
+    private var monitoringGoal: String? = null
+    private var reattachExistingSession = false
     @Volatile
     private var serviceDestroyed = false
+    @Volatile
+    private var handlingProjectionStop = false
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -111,6 +116,15 @@ class ScreenCaptureService : Service() {
                 }
                 return START_NOT_STICKY
             }
+            ACTION_CANCEL_AND_STOP -> {
+                prefs.userRequestedStop = true
+                UnlockResumeCoordinator.clearAwaitingResume(this)
+                capturesEnabled = false
+                captureHandler.removeCallbacks(captureRunnable)
+                releaseCaptureResources()
+                stopSelf()
+                return START_NOT_STICKY
+            }
         }
         if (mediaProjection != null) return START_NOT_STICKY
         // Prefer Intent extras (survives process handoff); fall back to in-memory store.
@@ -124,18 +138,21 @@ class ScreenCaptureService : Service() {
         }
         val resultData = intent?.let { readResultDataExtra(it) }
             ?: projectionPermission?.resultData
-        token = intent?.getStringExtra(EXTRA_TOKEN)
-        val goal = intent?.getStringExtra(EXTRA_GOAL)?.trim()
-        val intervalMinutes = intent?.getIntExtra(
+        token = intent?.getStringExtra(EXTRA_TOKEN) ?: prefs.mobileToken
+        val goal = intent?.getStringExtra(EXTRA_GOAL)?.trim()?.ifBlank { null } ?: prefs.goal.trim()
+        intervalMinutes = intent?.getIntExtra(
             EXTRA_INTERVAL_MINUTES,
-            DEFAULT_INTERVAL_MINUTES
-        ) ?: DEFAULT_INTERVAL_MINUTES
-        captureIntervalMs = intervalMinutes.coerceIn(5, 60) * 60_000L
+            prefs.intervalMinutes
+        ) ?: prefs.intervalMinutes
+        intervalMinutes = intervalMinutes.coerceIn(5, 60)
+        captureIntervalMs = intervalMinutes * 60_000L
+        reattachExistingSession = intent?.getBooleanExtra(EXTRA_REATTACH_SESSION, false) == true ||
+            prefs.awaitingResumeAfterLock
         val missingFields = buildList {
             if (resultCode == null) add("result code")
             if (resultData == null) add("result data")
             if (token.isNullOrBlank()) add("phone token")
-            if (goal.isNullOrBlank()) add("goal")
+            if (goal.isBlank()) add("goal")
         }
         if (missingFields.isNotEmpty()) {
             prefs.monitoringError = "Monitoring could not start; missing ${missingFields.joinToString()}."
@@ -144,12 +161,16 @@ class ScreenCaptureService : Service() {
         }
         if (resultCode != Activity.RESULT_OK) {
             prefs.monitoringError = "Monitoring could not start; screen-capture permission was not granted."
+            if (prefs.awaitingResumeAfterLock) {
+                UnlockResumeCoordinator.markAwaitingResume(this)
+            }
             stopSelf()
             return START_NOT_STICKY
         }
         val grantedResultCode = requireNotNull(resultCode)
         val grantedResultData = requireNotNull(resultData)
-        val monitoringGoal = requireNotNull(goal)
+        monitoringGoal = goal
+        prefs.userRequestedStop = false
 
         updateNotification(paused = false)
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
@@ -158,25 +179,46 @@ class ScreenCaptureService : Service() {
         mediaProjection = projection
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                stopSelf()
+                handleProjectionStopped()
             }
         }, captureHandler)
         setupVirtualDisplay()
         prefs.monitoringActive = true
         prefs.monitoringError = null
         prefs.lastCrash = null
-        startApiSessionAndCaptures(token as String, monitoringGoal, intervalMinutes)
+        UnlockResumeCoordinator.clearAwaitingResume(this)
+        startApiSessionAndCaptures(token as String, goal, intervalMinutes, reattachExistingSession)
         return START_NOT_STICKY
+    }
+
+    private fun handleProjectionStopped() {
+        if (handlingProjectionStop || serviceDestroyed) return
+        handlingProjectionStop = true
+        capturesEnabled = false
+        if (::captureHandler.isInitialized) captureHandler.removeCallbacks(captureRunnable)
+        releaseCaptureResources()
+        mediaProjection = null
+
+        if (prefs.userRequestedStop) {
+            prefs.monitoringActive = false
+            stopSelf()
+            return
+        }
+
+        // Android stops projection on lock (and status-bar chip). Keep session intent alive.
+        UnlockResumeCoordinator.markAwaitingResume(this)
+        stopSelf()
     }
 
     private fun startApiSessionAndCaptures(
         mobileToken: String,
         goal: String,
-        intervalMinutes: Int
+        intervalMinutes: Int,
+        reattach: Boolean
     ) {
         uploadExecutor.execute {
             val result = try {
-                api.start(mobileToken, goal, intervalMinutes)
+                ensureApiSession(mobileToken, goal, intervalMinutes, reattach)
             } catch (error: Throwable) {
                 ApiResult(false, "", error.message ?: error.javaClass.simpleName)
             }
@@ -190,8 +232,12 @@ class ScreenCaptureService : Service() {
             captureHandler.post {
                 if (serviceDestroyed || mediaProjection == null) {
                     prefs.monitoringActive = false
-                    prefs.monitoringError = "Screen sharing ended before monitoring could begin."
-                    uploadExecutor.execute { api.stop(mobileToken) }
+                    if (!prefs.userRequestedStop) {
+                        UnlockResumeCoordinator.markAwaitingResume(this)
+                    } else {
+                        prefs.monitoringError = "Screen sharing ended before monitoring could begin."
+                        uploadExecutor.execute { api.stop(mobileToken) }
+                    }
                     stopSelf()
                     return@post
                 }
@@ -201,6 +247,41 @@ class ScreenCaptureService : Service() {
                 captureHandler.postDelayed(captureRunnable, FIRST_CAPTURE_DELAY_MS)
             }
         }
+    }
+
+    private fun ensureApiSession(
+        mobileToken: String,
+        goal: String,
+        intervalMinutes: Int,
+        reattach: Boolean
+    ): ApiResult {
+        if (!reattach) {
+            return api.start(mobileToken, goal, intervalMinutes)
+        }
+        val status = api.status(mobileToken)
+        if (!status.ok) {
+            return api.start(mobileToken, goal, intervalMinutes)
+        }
+        val sessionStatus = try {
+            org.json.JSONObject(status.body).optJSONObject("session")?.optString("status").orEmpty()
+        } catch (_: Exception) {
+            ""
+        }
+        return when (sessionStatus) {
+            "active" -> ApiResult(true, status.body)
+            "paused" -> {
+                val resumed = api.resume(mobileToken)
+                if (resumed.ok) resumed else api.start(mobileToken, goal, intervalMinutes)
+            }
+            else -> api.start(mobileToken, goal, intervalMinutes)
+        }
+    }
+
+    private fun releaseCaptureResources() {
+        runCatching { virtualDisplay?.release() }
+        virtualDisplay = null
+        runCatching { imageReader?.close() }
+        imageReader = null
     }
 
     private fun setupVirtualDisplay() {
@@ -322,6 +403,7 @@ class ScreenCaptureService : Service() {
         runCatching {
             prefs.monitoringError = "$stage: ${error.message ?: error.javaClass.simpleName}"
             prefs.recordCrash(error)
+            UnlockResumeCoordinator.clearAwaitingResume(this)
         }
         capturesEnabled = false
         stopSelf()
@@ -351,12 +433,19 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         serviceDestroyed = true
-        if (::prefs.isInitialized) prefs.monitoringActive = false
+        val awaitingResume = ::prefs.isInitialized && prefs.awaitingResumeAfterLock
+        if (::prefs.isInitialized && !awaitingResume) {
+            prefs.monitoringActive = false
+        }
         capturesEnabled = false
         if (::captureHandler.isInitialized) captureHandler.removeCallbacksAndMessages(null)
-        runCatching { virtualDisplay?.release() }
-        runCatching { imageReader?.close() }
-        runCatching { mediaProjection?.stop() }
+        releaseCaptureResources()
+        val projection = mediaProjection
+        mediaProjection = null
+        // Avoid re-entrant onStop handling when we are already awaiting unlock resume.
+        if (!awaitingResume && !handlingProjectionStop) {
+            runCatching { projection?.stop() }
+        }
         uploadExecutor.shutdownNow()
         if (::captureThread.isInitialized) captureThread.quitSafely()
         super.onDestroy()
@@ -370,8 +459,10 @@ class ScreenCaptureService : Service() {
         const val EXTRA_INTERVAL_MINUTES = "interval_minutes"
         const val EXTRA_RESULT_CODE = "projection_result_code"
         const val EXTRA_RESULT_DATA = "projection_result_data"
+        const val EXTRA_REATTACH_SESSION = "reattach_session"
         const val ACTION_PAUSE = "com.deadlineai.monitor.PAUSE"
         const val ACTION_RESUME = "com.deadlineai.monitor.RESUME"
+        const val ACTION_CANCEL_AND_STOP = "com.deadlineai.monitor.CANCEL_AND_STOP"
         private const val TAG = "SpaceLinkCapture"
         private const val CHANNEL_ID = "spacelink_focus_monitoring"
         private const val NOTIFICATION_ID = 4182

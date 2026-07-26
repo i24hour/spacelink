@@ -10,5 +10,6 @@ class SpaceLinkApplication : Application() {
             runCatching { AppPrefs(this).recordCrash(throwable) }
             previousHandler?.uncaughtException(thread, throwable)
         }
+        UnlockResumeCoordinator.ensureRegisteredIfNeeded(this)
     }
 }
