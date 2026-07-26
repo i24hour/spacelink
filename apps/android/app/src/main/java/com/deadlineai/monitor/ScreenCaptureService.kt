@@ -50,6 +50,8 @@ class ScreenCaptureService : Service() {
     private var serviceDestroyed = false
     @Volatile
     private var handlingProjectionStop = false
+    @Volatile
+    private var foregroundStarted = false
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -79,16 +81,8 @@ class ScreenCaptureService : Service() {
         captureThread = HandlerThread("spacelink-screen-capture").also { it.start() }
         captureHandler = Handler(captureThread.looper)
         createNotificationChannel()
-        try {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(paused = false),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-        } catch (error: Throwable) {
-            prefs.recordCrash(error)
-            throw error
-        }
+        // Do not startForeground(mediaProjection) here. Android 14+/16 requires the user
+        // to have granted screen-capture consent first; that Intent arrives in onStartCommand.
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = try {
@@ -101,12 +95,20 @@ class ScreenCaptureService : Service() {
     private fun handleStartCommand(intent: Intent?): Int {
         when (intent?.action) {
             ACTION_PAUSE -> {
+                if (!foregroundStarted) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 capturesEnabled = false
                 captureHandler.removeCallbacks(captureRunnable)
                 updateNotification(paused = true)
                 return START_NOT_STICKY
             }
             ACTION_RESUME -> {
+                if (!foregroundStarted) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 if (mediaProjection != null) {
                     capturesEnabled = true
                     consecutiveCaptureMisses = 0
@@ -120,7 +122,9 @@ class ScreenCaptureService : Service() {
                 prefs.userRequestedStop = true
                 UnlockResumeCoordinator.clearAwaitingResume(this)
                 capturesEnabled = false
-                captureHandler.removeCallbacks(captureRunnable)
+                if (::captureHandler.isInitialized) {
+                    captureHandler.removeCallbacks(captureRunnable)
+                }
                 releaseCaptureResources()
                 stopSelf()
                 return START_NOT_STICKY
@@ -129,15 +133,17 @@ class ScreenCaptureService : Service() {
         if (mediaProjection != null) return START_NOT_STICKY
         // Prefer Intent extras (survives process handoff); fall back to in-memory store.
         // IMPORTANT: Activity.RESULT_OK is -1 on Android, so never treat -1 as "missing".
-        val projectionPermission = ProjectionPermissionStore.take()
+        // Prefer the in-memory grant Intent. Re-parceling the capture result through
+        // service extras can invalidate the token on some Android 15/16 OEMs.
+        val projectionPermission = ProjectionPermissionStore.peek()
         val hasResultCodeExtra = intent?.hasExtra(EXTRA_RESULT_CODE) == true
         val resultCode = when {
-            hasResultCodeExtra -> intent!!.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
             projectionPermission != null -> projectionPermission.resultCode
+            hasResultCodeExtra -> intent!!.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
             else -> null
         }
-        val resultData = intent?.let { readResultDataExtra(it) }
-            ?: projectionPermission?.resultData
+        val resultData = projectionPermission?.resultData
+            ?: intent?.let { readResultDataExtra(it) }
         token = intent?.getStringExtra(EXTRA_TOKEN) ?: prefs.mobileToken
         val goal = intent?.getStringExtra(EXTRA_GOAL)?.trim()?.ifBlank { null } ?: prefs.goal.trim()
         intervalMinutes = intent?.getIntExtra(
@@ -172,10 +178,36 @@ class ScreenCaptureService : Service() {
         monitoringGoal = goal
         prefs.userRequestedStop = false
 
-        updateNotification(paused = false)
+        // Required order on Android 14+/16:
+        // 1) user already granted capture consent
+        // 2) startForeground(mediaProjection)
+        // 3) getMediaProjection(...)
+        try {
+            ensureMediaProjectionForeground()
+        } catch (error: SecurityException) {
+            prefs.recordCrash(error)
+            prefs.monitoringError =
+                "Android blocked screen-capture service start. Allow screen sharing, then tap Start again."
+            ProjectionPermissionStore.clear()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        ProjectionPermissionStore.take()
         val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val projection = manager.getMediaProjection(grantedResultCode, grantedResultData)
-            ?: throw IllegalStateException("MediaProjection was not granted")
+        val projection = try {
+            manager.getMediaProjection(grantedResultCode, grantedResultData)
+        } catch (error: SecurityException) {
+            prefs.recordCrash(error)
+            prefs.monitoringError =
+                "Could not create MediaProjection. Tap Start and allow screen sharing again."
+            stopSelf()
+            return START_NOT_STICKY
+        } ?: run {
+            prefs.monitoringError = "MediaProjection was not granted"
+            stopSelf()
+            return START_NOT_STICKY
+        }
         mediaProjection = projection
         projection.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
@@ -187,8 +219,22 @@ class ScreenCaptureService : Service() {
         prefs.monitoringError = null
         prefs.lastCrash = null
         UnlockResumeCoordinator.clearAwaitingResume(this)
+        updateNotification(paused = false)
         startApiSessionAndCaptures(token as String, goal, intervalMinutes, reattachExistingSession)
         return START_NOT_STICKY
+    }
+
+    private fun ensureMediaProjectionForeground() {
+        if (foregroundStarted) {
+            updateNotification(paused = false)
+            return
+        }
+        startForeground(
+            NOTIFICATION_ID,
+            buildNotification(paused = false),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        )
+        foregroundStarted = true
     }
 
     private fun handleProjectionStopped() {

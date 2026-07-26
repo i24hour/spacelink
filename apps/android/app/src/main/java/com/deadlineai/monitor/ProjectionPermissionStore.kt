@@ -16,6 +16,9 @@ object ProjectionPermissionStore {
     }
 
     @Synchronized
+    fun peek(): ProjectionPermission? = pending
+
+    @Synchronized
     fun take(): ProjectionPermission? {
         val permission = pending
         pending = null

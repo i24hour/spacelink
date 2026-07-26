@@ -12,9 +12,11 @@ android {
     defaultConfig {
         applicationId = "com.deadlineai.monitor"
         minSdk = 29
-        targetSdk = 36
-        versionCode = 9
-        versionName = "0.1.8"
+        // Keep compileSdk current, but target 34 so Android 15/16 mediaProjection FGS
+        // checks match the documented grant-then-startForeground contract more reliably.
+        targetSdk = 34
+        versionCode = 10
+        versionName = "0.1.9"
 
         buildConfigField("String", "API_BASE_URL", "\"https://deadlineai-api.onrender.com\"")
     }
@@ -39,7 +41,7 @@ android {
     }
 
     base {
-        archivesName.set("spacelink-focus-0.1.8")
+        archivesName.set("spacelink-focus-0.1.9")
     }
 }
 
