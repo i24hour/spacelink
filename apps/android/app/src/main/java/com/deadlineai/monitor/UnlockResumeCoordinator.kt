@@ -14,8 +14,9 @@ import android.os.SystemClock
 import android.provider.Settings
 
 /**
- * After Android stops MediaProjection on lock, prompt immediately on unlock with a
- * full-screen style popup (plus notification) so the user does not need to open the app first.
+ * After Android stops MediaProjection on lock, prompt immediately on unlock with:
+ * 1) overlay popup when "Display over other apps" is granted
+ * 2) full-screen notification intent as fallback
  */
 object UnlockResumeCoordinator {
     private const val CHANNEL_ID = "spacelink_resume_after_lock"
@@ -39,7 +40,6 @@ object UnlockResumeCoordinator {
                 unregister(appContext)
                 return
             }
-            // Wait until the user has actually unlocked (not only screen-on).
             if (action == Intent.ACTION_SCREEN_ON && isKeyguardLocked(appContext)) {
                 showLockedWaitingNotification(appContext)
                 return
@@ -54,8 +54,11 @@ object UnlockResumeCoordinator {
         val prefs = AppPrefs(appContext)
         prefs.awaitingResumeAfterLock = true
         prefs.monitoringActive = false
-        prefs.monitoringError =
-            "Screen locked. After unlock, SpaceLink will pop up so you can allow capture again."
+        prefs.monitoringError = if (UnlockOverlayController.canDrawOverlays(appContext)) {
+            "Screen locked. After unlock, SpaceLink will pop up over your screen to continue."
+        } else {
+            "Screen locked. Enable Display over other apps for SpaceLink so the continue popup can appear after unlock."
+        }
         register(appContext)
         if (isKeyguardLocked(appContext)) {
             showLockedWaitingNotification(appContext)
@@ -68,6 +71,7 @@ object UnlockResumeCoordinator {
         val appContext = context.applicationContext
         val prefs = AppPrefs(appContext)
         prefs.awaitingResumeAfterLock = false
+        UnlockOverlayController.dismiss(appContext)
         cancelResumeNotification(appContext)
         unregister(appContext)
     }
@@ -93,7 +97,6 @@ object UnlockResumeCoordinator {
         }
     }
 
-    /** Kept for MainActivity notification / deep-link compatibility. */
     fun resumeActivityIntent(context: Context): Intent = resumePopupIntent(context)
 
     private fun promptOnUnlock(context: Context) {
@@ -102,8 +105,14 @@ object UnlockResumeCoordinator {
         if (allowFullScreen) {
             lastFullScreenAtElapsed = now
         }
+
+        // Best path on OEMs: draw-over-apps overlay on top of whatever is open.
+        if (UnlockOverlayController.canDrawOverlays(context)) {
+            UnlockOverlayController.showContinueOverlay(context)
+        }
+
         showResumeNotification(context, useFullScreen = allowFullScreen)
-        // Best-effort direct launch; full-screen intent covers OEMs that block background starts.
+        // Best-effort direct launch; often blocked unless overlay / FSI works.
         launchResumeActivity(context)
     }
 
@@ -137,9 +146,14 @@ object UnlockResumeCoordinator {
     private fun showLockedWaitingNotification(context: Context) {
         createChannel(context)
         val pendingIntent = popupPendingIntent(context)
+        val text = if (UnlockOverlayController.canDrawOverlays(context)) {
+            "Unlock your phone — a continue popup will appear on screen."
+        } else {
+            "Unlock, then allow Display over other apps for SpaceLink (needed for unlock popup)."
+        }
         val notification = Notification.Builder(context, CHANNEL_ID)
             .setContentTitle("SpaceLink paused while locked")
-            .setContentText("Unlock your phone — a continue prompt will appear.")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
@@ -165,32 +179,24 @@ object UnlockResumeCoordinator {
 
         if (useFullScreen && canUseFullScreenIntent(context)) {
             builder.setFullScreenIntent(pendingIntent, true)
+            @Suppress("DEPRECATION")
             builder.setPriority(Notification.PRIORITY_MAX)
         } else {
+            @Suppress("DEPRECATION")
             builder.setPriority(Notification.PRIORITY_HIGH)
         }
 
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, notificationOrFallback(context, builder, pendingIntent, useFullScreen))
-    }
-
-    private fun notificationOrFallback(
-        context: Context,
-        builder: Notification.Builder,
-        pendingIntent: PendingIntent,
-        wantedFullScreen: Boolean
-    ): Notification {
-        if (wantedFullScreen &&
+        if (useFullScreen &&
             Build.VERSION.SDK_INT >= 34 &&
             !canUseFullScreenIntent(context)
         ) {
-            // Still post a heads-up notification; user may need to enable full-screen intents.
             builder.setContentText(
-                "Tap to continue. Tip: enable full-screen notifications for SpaceLink in system settings for auto pop-up."
+                "Tap to continue. Also enable Display over other apps for SpaceLink for auto pop-up."
             )
-            builder.setContentIntent(pendingIntent)
         }
-        return builder.build()
+
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, builder.build())
     }
 
     private fun popupPendingIntent(context: Context): PendingIntent {
@@ -214,7 +220,7 @@ object UnlockResumeCoordinator {
             "SpaceLink resume after lock",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
-            description = "Shows a full-screen continue prompt after you unlock"
+            description = "Shows a continue prompt after you unlock"
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             enableVibration(true)
             setBypassDnd(true)

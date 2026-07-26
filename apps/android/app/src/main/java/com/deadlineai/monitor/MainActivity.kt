@@ -38,6 +38,7 @@ class MainActivity : Activity() {
     private var currentSessionStatus = ""
     private var capturePromptInFlight = false
     private var suppressAutoResumeUntilElapsed = 0L
+    private var pendingStartAfterOverlayPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,6 +63,17 @@ class MainActivity : Activity() {
         super.onResume()
         if (::statusText.isInitialized && prefs.mobileToken != null) {
             refreshMonitoringStatus()
+        }
+        if (pendingStartAfterOverlayPermission) {
+            pendingStartAfterOverlayPermission = false
+            if (UnlockOverlayController.canDrawOverlays(this)) {
+                statusText.text = "Display-over-apps enabled. Continue with screen-capture permission..."
+                requestScreenCapture(autoResume = false, requireOverlay = false)
+            } else {
+                statusText.text =
+                    "Display over other apps is still off. Enable it so the unlock popup can appear on your screen."
+                toast("Enable Display over other apps for SpaceLink, then tap Start again")
+            }
         }
         maybeAutoResumeCapture(intent)
     }
@@ -152,6 +164,14 @@ class MainActivity : Activity() {
         content.addView(startButton, buttonParams())
         content.addView(pauseButton, buttonParams())
         content.addView(stopButton, buttonParams())
+        content.addView(Button(this).apply {
+            text = "Allow display over other apps"
+            setOnClickListener {
+                statusText.text =
+                    "Open the next screen and allow SpaceLink to display over other apps. This is needed for the unlock popup."
+                UnlockOverlayController.requestOverlayPermission(this@MainActivity)
+            }
+        }, buttonParams())
 
         statusText = label("Not paired", 14f)
         statusText.setPadding(0, 20, 0, 0)
@@ -159,7 +179,7 @@ class MainActivity : Activity() {
         content.addView(spacer(16))
         content.addView(
             label(
-                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked; after unlock, SpaceLink will ask you to allow capture again to continue.",
+                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked. For the unlock popup to appear on top of other apps, allow Display over other apps for SpaceLink, then Allow screen capture again after unlock.",
                 13f
             )
         )
@@ -225,10 +245,11 @@ class MainActivity : Activity() {
             goalInput.setText(prefs.goal)
         }
         statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
-        requestScreenCapture(autoResume = true)
+        // Already inside the app; don't block capture on overlay settings here.
+        requestScreenCapture(autoResume = true, requireOverlay = false)
     }
 
-    private fun requestScreenCapture(autoResume: Boolean = false) {
+    private fun requestScreenCapture(autoResume: Boolean = false, requireOverlay: Boolean = !autoResume) {
         if (capturePromptInFlight) return
         val token = prefs.mobileToken
         val goal = goalInput.text.toString().trim().ifBlank { prefs.goal.trim() }
@@ -238,6 +259,15 @@ class MainActivity : Activity() {
         }
         if (goal.length < 3) {
             toast("Enter a goal first")
+            return
+        }
+        // Overlay permission is required for the unlock popup to appear over Home/other apps.
+        if (requireOverlay && !UnlockOverlayController.canDrawOverlays(this)) {
+            pendingStartAfterOverlayPermission = true
+            statusText.text =
+                "First allow Display over other apps for SpaceLink. Then you will be asked for screen capture."
+            toast("Allow Display over other apps, then return here")
+            UnlockOverlayController.requestOverlayPermission(this)
             return
         }
         pendingGoal = goal

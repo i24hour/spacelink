@@ -183,6 +183,7 @@ class ResumeCaptureActivity : Activity() {
                 startService(serviceIntent)
             }
             prefs.monitoringActive = true
+            UnlockOverlayController.dismiss(this)
             UnlockResumeCoordinator.clearAwaitingResume(this)
             Toast.makeText(this, "Monitoring continued", Toast.LENGTH_SHORT).show()
             finish()
