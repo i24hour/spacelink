@@ -6,4 +6,16 @@
         <item name="android:statusBarColor">#F8FAFC</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+
+    <style name="ResumePopupTheme" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+        <item name="android:colorAccent">#2563EB</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

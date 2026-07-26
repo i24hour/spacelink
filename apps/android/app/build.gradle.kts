@@ -13,8 +13,8 @@ android {
         applicationId = "com.deadlineai.monitor"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.1.7"
+        versionCode = 9
+        versionName = "0.1.8"
 
         buildConfigField("String", "API_BASE_URL", "\"https://deadlineai-api.onrender.com\"")
     }
@@ -39,7 +39,7 @@ android {
     }
 
     base {
-        archivesName.set("spacelink-focus-0.1.7")
+        archivesName.set("spacelink-focus-0.1.8")
     }
 }
 
