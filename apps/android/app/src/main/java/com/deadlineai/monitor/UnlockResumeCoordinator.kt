@@ -14,9 +14,8 @@ import android.os.SystemClock
 import android.provider.Settings
 
 /**
- * After Android stops MediaProjection on lock, prompt immediately on unlock with:
- * 1) overlay popup when "Display over other apps" is granted
- * 2) full-screen notification intent as fallback
+ * After Android stops MediaProjection on lock, keep a watch service alive and prompt on unlock:
+ * overlay (if allowed), full-screen intent, and activity launch.
  */
 object UnlockResumeCoordinator {
     private const val CHANNEL_ID = "spacelink_resume_after_lock"
@@ -30,6 +29,9 @@ object UnlockResumeCoordinator {
     @Volatile
     private var lastFullScreenAtElapsed = 0L
 
+    @Volatile
+    private var lastPromptAtElapsed = 0L
+
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             val action = intent?.action ?: return
@@ -38,6 +40,7 @@ object UnlockResumeCoordinator {
             val prefs = AppPrefs(appContext)
             if (!prefs.awaitingResumeAfterLock) {
                 unregister(appContext)
+                UnlockWatchService.stop(appContext)
                 return
             }
             if (action == Intent.ACTION_SCREEN_ON && isKeyguardLocked(appContext)) {
@@ -55,14 +58,15 @@ object UnlockResumeCoordinator {
         prefs.awaitingResumeAfterLock = true
         prefs.monitoringActive = false
         prefs.monitoringError = if (UnlockOverlayController.canDrawOverlays(appContext)) {
-            "Screen locked. After unlock, SpaceLink will pop up over your screen to continue."
+            "Screen locked. After unlock, SpaceLink will pop up to continue."
         } else {
-            "Screen locked. Enable Display over other apps for SpaceLink so the continue popup can appear after unlock."
+            "Screen locked. After unlock, tap the SpaceLink notification (or enable Display over other apps for auto popup)."
         }
         register(appContext)
-        if (isKeyguardLocked(appContext)) {
-            showLockedWaitingNotification(appContext)
-        } else {
+        showLockedWaitingNotification(appContext)
+        // Critical: keep process alive so unlock broadcasts are received.
+        UnlockWatchService.start(appContext)
+        if (!isKeyguardLocked(appContext)) {
             promptOnUnlock(appContext)
         }
     }
@@ -74,16 +78,25 @@ object UnlockResumeCoordinator {
         UnlockOverlayController.dismiss(appContext)
         cancelResumeNotification(appContext)
         unregister(appContext)
+        UnlockWatchService.stop(appContext)
     }
 
     fun ensureRegisteredIfNeeded(context: Context) {
         if (AppPrefs(context.applicationContext).awaitingResumeAfterLock) {
             register(context.applicationContext)
-            if (isKeyguardLocked(context.applicationContext)) {
-                showLockedWaitingNotification(context.applicationContext)
-            } else {
-                showResumeNotification(context.applicationContext, useFullScreen = false)
-            }
+            showLockedWaitingNotification(context.applicationContext)
+            UnlockWatchService.start(context.applicationContext)
+        }
+    }
+
+    fun onWatchServiceStarted(context: Context) {
+        register(context.applicationContext)
+    }
+
+    fun onWatchServiceStopping(context: Context) {
+        // Keep receiver if we are still awaiting and process remains alive.
+        if (!AppPrefs(context.applicationContext).awaitingResumeAfterLock) {
+            unregister(context.applicationContext)
         }
     }
 
@@ -101,18 +114,19 @@ object UnlockResumeCoordinator {
 
     private fun promptOnUnlock(context: Context) {
         val now = SystemClock.elapsedRealtime()
+        if (now - lastPromptAtElapsed < 2_500L) return
+        lastPromptAtElapsed = now
+
         val allowFullScreen = now - lastFullScreenAtElapsed >= FULL_SCREEN_COOLDOWN_MS
         if (allowFullScreen) {
             lastFullScreenAtElapsed = now
         }
 
-        // Best path on OEMs: draw-over-apps overlay on top of whatever is open.
         if (UnlockOverlayController.canDrawOverlays(context)) {
             UnlockOverlayController.showContinueOverlay(context)
         }
 
         showResumeNotification(context, useFullScreen = allowFullScreen)
-        // Best-effort direct launch; often blocked unless overlay / FSI works.
         launchResumeActivity(context)
     }
 
@@ -147,9 +161,9 @@ object UnlockResumeCoordinator {
         createChannel(context)
         val pendingIntent = popupPendingIntent(context)
         val text = if (UnlockOverlayController.canDrawOverlays(context)) {
-            "Unlock your phone — a continue popup will appear on screen."
+            "Phone locked. Unlock — continue popup will appear."
         } else {
-            "Unlock, then allow Display over other apps for SpaceLink (needed for unlock popup)."
+            "Phone locked. After unlock, tap here to continue SpaceLink."
         }
         val notification = Notification.Builder(context, CHANNEL_ID)
             .setContentTitle("SpaceLink paused while locked")
@@ -186,15 +200,6 @@ object UnlockResumeCoordinator {
             builder.setPriority(Notification.PRIORITY_HIGH)
         }
 
-        if (useFullScreen &&
-            Build.VERSION.SDK_INT >= 34 &&
-            !canUseFullScreenIntent(context)
-        ) {
-            builder.setContentText(
-                "Tap to continue. Also enable Display over other apps for SpaceLink for auto pop-up."
-            )
-        }
-
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, builder.build())
     }
@@ -211,6 +216,7 @@ object UnlockResumeCoordinator {
     private fun cancelResumeNotification(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.cancel(NOTIFICATION_ID)
+        manager.cancel(UnlockWatchService.NOTIFICATION_ID)
     }
 
     private fun createChannel(context: Context) {
