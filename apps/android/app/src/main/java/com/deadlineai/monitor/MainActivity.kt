@@ -64,17 +64,6 @@ class MainActivity : Activity() {
         if (::statusText.isInitialized && prefs.mobileToken != null) {
             refreshMonitoringStatus()
         }
-        if (pendingStartAfterOverlayPermission) {
-            pendingStartAfterOverlayPermission = false
-            if (UnlockOverlayController.canDrawOverlays(this)) {
-                statusText.text = "Display-over-apps enabled. Continue with screen-capture permission..."
-                requestScreenCapture(autoResume = false, requireOverlay = false)
-            } else {
-                statusText.text =
-                    "Display over other apps is still off. Enable it so the unlock popup can appear on your screen."
-                toast("Enable Display over other apps for SpaceLink, then tap Start again")
-            }
-        }
         maybeAutoResumeCapture(intent)
     }
 
@@ -166,11 +155,7 @@ class MainActivity : Activity() {
         content.addView(stopButton, buttonParams())
         content.addView(Button(this).apply {
             text = "Allow display over other apps"
-            setOnClickListener {
-                statusText.text =
-                    "Open the next screen and allow SpaceLink to display over other apps. This is needed for the unlock popup."
-                UnlockOverlayController.requestOverlayPermission(this@MainActivity)
-            }
+            setOnClickListener { openOverlayPermissionHelp() }
         }, buttonParams())
 
         statusText = label("Not paired", 14f)
@@ -179,7 +164,7 @@ class MainActivity : Activity() {
         content.addView(spacer(16))
         content.addView(
             label(
-                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked. For the unlock popup to appear on top of other apps, allow Display over other apps for SpaceLink, then Allow screen capture again after unlock.",
+                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked. Sideloaded APKs often block Display over other apps until you enable Allow restricted settings in App info (⋮ menu).",
                 13f
             )
         )
@@ -261,14 +246,12 @@ class MainActivity : Activity() {
             toast("Enter a goal first")
             return
         }
-        // Overlay permission is required for the unlock popup to appear over Home/other apps.
+        // Overlay helps unlock popup, but sideloaded APKs often need "Allow restricted settings"
+        // first. Never block Start monitoring on overlay — fall back to notification resume.
         if (requireOverlay && !UnlockOverlayController.canDrawOverlays(this)) {
-            pendingStartAfterOverlayPermission = true
             statusText.text =
-                "First allow Display over other apps for SpaceLink. Then you will be asked for screen capture."
-            toast("Allow Display over other apps, then return here")
-            UnlockOverlayController.requestOverlayPermission(this)
-            return
+                "Tip: unlock popup needs Display over other apps. If Android says App was denied access, open App info → ⋮ → Allow restricted settings, then enable the toggle. Continuing with screen capture now..."
+            toast("You can enable overlay later for unlock popup")
         }
         pendingGoal = goal
         prefs.goal = goal
@@ -526,6 +509,25 @@ class MainActivity : Activity() {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+    }
+
+    private fun openOverlayPermissionHelp() {
+        if (UnlockOverlayController.canDrawOverlays(this)) {
+            statusText.text = "Display over other apps is already allowed."
+            toast("Overlay permission already enabled")
+            return
+        }
+        statusText.text =
+            "If Android says App was denied access: App info → top-right menu → Allow restricted settings → then turn on Display over other apps."
+        toast("App info → menu → Allow restricted settings")
+        // App details first so the restricted-settings menu is easy to find.
+        runCatching {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+            )
         }
     }
 
