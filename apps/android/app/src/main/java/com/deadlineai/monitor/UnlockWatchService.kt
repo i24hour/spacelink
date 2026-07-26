@@ -75,14 +75,9 @@ class UnlockWatchService : Service() {
             UnlockResumeCoordinator.resumePopupIntent(this),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val overlayHint = if (UnlockOverlayController.canDrawOverlays(this)) {
-            "Unlock your phone — continue popup will appear."
-        } else {
-            "Unlock, then tap this notification to continue (enable Display over other apps for auto popup)."
-        }
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("SpaceLink waiting for unlock")
-            .setContentText(overlayHint)
+            .setContentText("Wake the phone — Continue should open on screen.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

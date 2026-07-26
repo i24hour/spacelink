@@ -157,6 +157,14 @@ class MainActivity : Activity() {
             text = "Allow display over other apps"
             setOnClickListener { openOverlayPermissionHelp() }
         }, buttonParams())
+        content.addView(Button(this).apply {
+            text = "Allow full-screen continue alerts"
+            setOnClickListener {
+                statusText.text =
+                    "Enable full-screen notifications for SpaceLink so Continue opens on screen after lock (no need to pull notification shade)."
+                UnlockResumeCoordinator.openFullScreenIntentSettings(this@MainActivity)
+            }
+        }, buttonParams())
 
         statusText = label("Not paired", 14f)
         statusText.setPadding(0, 20, 0, 0)

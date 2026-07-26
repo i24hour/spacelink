@@ -7,20 +7,22 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Dialog-style activity launched via full-screen notification after unlock so the user
- * can re-allow screen capture without manually opening SpaceLink from the launcher.
+ * Front-of-screen continue UI. Can appear over the lock screen via full-screen intent so the
+ * user does not need to open the notification shade.
  */
 class ResumeCaptureActivity : Activity() {
     private lateinit var prefs: AppPrefs
@@ -33,6 +35,7 @@ class ResumeCaptureActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
+        prepareLockScreenPresentation()
         setContentView(buildView())
 
         if (!prefs.awaitingResumeAfterLock || prefs.mobileToken == null || prefs.goal.trim().length < 3) {
@@ -42,17 +45,45 @@ class ResumeCaptureActivity : Activity() {
         }
 
         if (isKeyguardLocked()) {
-            statusText.text = "Unlock your phone first, then tap Continue."
+            statusText.text = "Unlock your phone, then tap Continue (or Continue after unlock)."
+            // Keep UI visible over lock screen; auto-start capture only after unlock.
             return
         }
 
-        // Bring the system share-screen prompt forward quickly after unlock.
-        mainHandler.postDelayed({ requestScreenCapture() }, 350L)
+        mainHandler.postDelayed({ requestScreenCapture() }, 250L)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!::prefs.isInitialized || !::statusText.isInitialized) return
+        if (!prefs.awaitingResumeAfterLock || promptInFlight) return
+        if (!isKeyguardLocked() && prefs.mobileToken != null && prefs.goal.trim().length >= 3) {
+            statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
+            mainHandler.postDelayed({ requestScreenCapture() }, 200L)
+        }
     }
 
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
+    }
+
+    private fun prepareLockScreenPresentation() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+            )
+        }
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            keyguard.requestDismissKeyguard(this, null)
+        }
     }
 
     private fun buildView(): View {
@@ -73,7 +104,7 @@ class ResumeCaptureActivity : Activity() {
             setPadding(0, 0, 0, 12)
         })
         statusText = TextView(this).apply {
-            text = "Your phone was locked, so Android stopped screen capture. Tap Continue, then Allow on the next screen to keep monitoring."
+            text = "Tap Continue, then Allow on the Android screen-share prompt."
             textSize = 15f
             setTextColor(0xFF334155.toInt())
         }
@@ -116,6 +147,10 @@ class ResumeCaptureActivity : Activity() {
         if (promptInFlight) return
         if (isKeyguardLocked()) {
             statusText.text = "Unlock your phone first, then tap Continue."
+            val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                keyguard.requestDismissKeyguard(this, null)
+            }
             return
         }
         if (prefs.mobileToken == null || prefs.goal.trim().length < 3) {
@@ -128,8 +163,8 @@ class ResumeCaptureActivity : Activity() {
                 ?: throw IllegalStateException("Android screen-capture service is unavailable")
             promptInFlight = true
             continueButton.isEnabled = false
-            statusText.text = "Allow screen capture on the next Android screen to continue monitoring..."
-            val captureIntent = if (android.os.Build.VERSION.SDK_INT >= 34) {
+            statusText.text = "Allow screen capture on the next Android screen..."
+            val captureIntent = if (Build.VERSION.SDK_INT >= 34) {
                 manager.createScreenCaptureIntent(
                     MediaProjectionConfig.createConfigForDefaultDisplay()
                 )
@@ -152,7 +187,7 @@ class ResumeCaptureActivity : Activity() {
         continueButton.isEnabled = true
         if (resultCode != RESULT_OK || data == null) {
             UnlockResumeCoordinator.markAwaitingResume(this)
-            statusText.text = "Permission denied. Tap Continue when you are ready, or Not now."
+            statusText.text = "Permission denied. Tap Continue when ready, or Not now."
             Toast.makeText(this, "Screen capture permission was not granted", Toast.LENGTH_LONG).show()
             return
         }
@@ -177,7 +212,7 @@ class ResumeCaptureActivity : Activity() {
             prefs.userRequestedStop = false
             prefs.monitoringError = null
             prefs.lastCrash = null
-            if (android.os.Build.VERSION.SDK_INT >= 26) {
+            if (Build.VERSION.SDK_INT >= 26) {
                 startForegroundService(serviceIntent)
             } else {
                 startService(serviceIntent)
