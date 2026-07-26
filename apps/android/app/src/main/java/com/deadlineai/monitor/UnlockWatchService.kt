@@ -77,7 +77,7 @@ class UnlockWatchService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("SpaceLink waiting for unlock")
-            .setContentText("Wake the phone — Continue should open on screen.")
+            .setContentText("Unlock the phone — then Continue / share screen will appear.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(pendingIntent)
             .setOngoing(true)

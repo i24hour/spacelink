@@ -27,11 +27,11 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTop"
-            android:showOnLockScreen="true"
-            android:showWhenLocked="true"
+            android:showOnLockScreen="false"
+            android:showWhenLocked="false"
             android:taskAffinity=""
             android:theme="@style/ResumePopupTheme"
-            android:turnScreenOn="true" />
+            android:turnScreenOn="false" />
 
         <service
             android:name=".ScreenCaptureService"

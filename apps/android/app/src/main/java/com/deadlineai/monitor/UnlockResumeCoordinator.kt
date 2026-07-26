@@ -18,9 +18,8 @@ import android.provider.Settings
 
 /**
  * After MediaProjection stops on lock, keep a watch service alive and bring the continue
- * UI to the front:
- * - On SCREEN_ON while still locked: full-screen intent (like an alarm) over lock screen
- * - On USER_PRESENT: launch continue activity again + overlay if allowed
+ * UI to the front only after the user fully unlocks (USER_PRESENT).
+ * Never open the Android share-screen dialog on the lock screen.
  */
 object UnlockResumeCoordinator {
     private const val CHANNEL_ID = "spacelink_resume_after_lock"
@@ -50,13 +49,14 @@ object UnlockResumeCoordinator {
 
             when (action) {
                 Intent.ACTION_SCREEN_ON -> {
-                    // Fire WHILE still locked so Android allows a real full-screen UI
-                    // (after unlock, FSI often becomes only a heads-up notification).
+                    // Keep waiting notification only. Do NOT open Continue / share-screen
+                    // while the keyguard is still locked.
                     if (isKeyguardLocked(appContext)) {
-                        promptBringToFront(appContext, reason = "screen_on_locked")
+                        showWaitingNotification(appContext)
                     }
                 }
                 Intent.ACTION_USER_PRESENT -> {
+                    // Phone is unlocked — now it is safe to open Continue + share screen.
                     promptBringToFront(appContext, reason = "user_present")
                 }
             }
@@ -69,10 +69,11 @@ object UnlockResumeCoordinator {
         prefs.awaitingResumeAfterLock = true
         prefs.monitoringActive = false
         prefs.monitoringError =
-            "Screen locked. When you wake/unlock the phone, SpaceLink will open Continue on screen."
+            "Screen locked. After you unlock the phone, SpaceLink will ask to continue (not on the lock screen)."
         register(appContext)
         showWaitingNotification(appContext)
         UnlockWatchService.start(appContext)
+        // Only prompt if already unlocked (e.g. projection stopped for another reason).
         if (!isKeyguardLocked(appContext)) {
             promptBringToFront(appContext, reason = "already_unlocked")
         }
@@ -118,22 +119,26 @@ object UnlockResumeCoordinator {
     fun resumeActivityIntent(context: Context): Intent = resumePopupIntent(context)
 
     fun promptBringToFront(context: Context, reason: String) {
+        val appContext = context.applicationContext
+        // Hard guard: never open Continue / share-screen over the lock screen.
+        if (isKeyguardLocked(appContext)) {
+            showWaitingNotification(appContext)
+            android.util.Log.i("SpaceLinkUnlock", "skip prompt while locked reason=$reason")
+            return
+        }
+
         val now = SystemClock.elapsedRealtime()
         if (now - lastPromptAtElapsed < PROMPT_COOLDOWN_MS) return
         lastPromptAtElapsed = now
-
-        val appContext = context.applicationContext
         android.util.Log.i("SpaceLinkUnlock", "promptBringToFront reason=$reason")
 
         if (UnlockOverlayController.canDrawOverlays(appContext)) {
             UnlockOverlayController.showContinueOverlay(appContext)
         }
 
-        // 1) Full-screen notification — strongest path while device is still locked.
         postFullScreenContinueNotification(appContext)
-
-        // 2) Direct launch from our foreground watch service context.
         mainHandler.post {
+            if (isKeyguardLocked(appContext)) return@post
             launchResumeActivity(appContext)
             sendFullScreenPendingIntent(appContext)
         }
@@ -198,7 +203,7 @@ object UnlockResumeCoordinator {
         createChannel(context)
         val notification = Notification.Builder(context, CHANNEL_ID)
             .setContentTitle("SpaceLink paused while locked")
-            .setContentText("Wake/unlock the phone — Continue will open on screen.")
+            .setContentText("Unlock the phone first — then Continue will open.")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(contentPendingIntent(context))
             .setOngoing(true)

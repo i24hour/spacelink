@@ -14,15 +14,14 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 
 /**
- * Front-of-screen continue UI. Can appear over the lock screen via full-screen intent so the
- * user does not need to open the notification shade.
+ * Continue UI shown only after the phone is unlocked.
+ * Never launches the Android share-screen dialog on the lock screen.
  */
 class ResumeCaptureActivity : Activity() {
     private lateinit var prefs: AppPrefs
@@ -30,12 +29,12 @@ class ResumeCaptureActivity : Activity() {
     private lateinit var continueButton: Button
     private lateinit var notNowButton: Button
     private var promptInFlight = false
+    private var captureScheduled = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
-        prepareLockScreenPresentation()
         setContentView(buildView())
 
         if (!prefs.awaitingResumeAfterLock || prefs.mobileToken == null || prefs.goal.trim().length < 3) {
@@ -45,22 +44,26 @@ class ResumeCaptureActivity : Activity() {
         }
 
         if (isKeyguardLocked()) {
-            statusText.text = "Unlock your phone, then tap Continue (or Continue after unlock)."
-            // Keep UI visible over lock screen; auto-start capture only after unlock.
+            // If we somehow opened while locked, wait — do not start share-screen yet.
+            statusText.text = "Unlock your phone first. Screen sharing will start only after unlock."
+            continueButton.isEnabled = false
             return
         }
 
-        mainHandler.postDelayed({ requestScreenCapture() }, 250L)
+        scheduleCaptureAfterUnlock()
     }
 
     override fun onResume() {
         super.onResume()
         if (!::prefs.isInitialized || !::statusText.isInitialized) return
         if (!prefs.awaitingResumeAfterLock || promptInFlight) return
-        if (!isKeyguardLocked() && prefs.mobileToken != null && prefs.goal.trim().length >= 3) {
-            statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
-            mainHandler.postDelayed({ requestScreenCapture() }, 200L)
+        if (isKeyguardLocked()) {
+            statusText.text = "Unlock your phone first. Screen sharing will start only after unlock."
+            continueButton.isEnabled = false
+            return
         }
+        continueButton.isEnabled = true
+        scheduleCaptureAfterUnlock()
     }
 
     override fun onDestroy() {
@@ -68,22 +71,17 @@ class ResumeCaptureActivity : Activity() {
         super.onDestroy()
     }
 
-    private fun prepareLockScreenPresentation() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            setShowWhenLocked(true)
-            setTurnScreenOn(true)
-        } else {
-            @Suppress("DEPRECATION")
-            window.addFlags(
-                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-            )
-        }
-        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            keyguard.requestDismissKeyguard(this, null)
-        }
+    private fun scheduleCaptureAfterUnlock() {
+        if (captureScheduled || promptInFlight || isKeyguardLocked()) return
+        captureScheduled = true
+        statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
+        // Small delay so the launcher/keyguard finish settling before the system dialog.
+        mainHandler.postDelayed({
+            captureScheduled = false
+            if (!isKeyguardLocked()) {
+                requestScreenCapture()
+            }
+        }, 450L)
     }
 
     private fun buildView(): View {
@@ -104,7 +102,7 @@ class ResumeCaptureActivity : Activity() {
             setPadding(0, 0, 0, 12)
         })
         statusText = TextView(this).apply {
-            text = "Tap Continue, then Allow on the Android screen-share prompt."
+            text = "After unlock, tap Continue and Allow screen sharing."
             textSize = 15f
             setTextColor(0xFF334155.toInt())
         }
@@ -146,11 +144,8 @@ class ResumeCaptureActivity : Activity() {
     private fun requestScreenCapture() {
         if (promptInFlight) return
         if (isKeyguardLocked()) {
-            statusText.text = "Unlock your phone first, then tap Continue."
-            val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                keyguard.requestDismissKeyguard(this, null)
-            }
+            statusText.text = "Unlock your phone first. Screen sharing will start only after unlock."
+            continueButton.isEnabled = false
             return
         }
         if (prefs.mobileToken == null || prefs.goal.trim().length < 3) {
