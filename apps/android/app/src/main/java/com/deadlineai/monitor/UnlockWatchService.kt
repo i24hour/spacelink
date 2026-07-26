@@ -1,5 +1,6 @@
 package com.deadlineai.monitor
 
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,18 +10,104 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
 
 /**
- * Keeps the process alive after MediaProjection stops on lock, so unlock events can still
- * trigger the continue popup/notification. Without this, Android often kills the app and
- * the dynamic unlock listener disappears.
+ * Stays alive after lock and actively watches for unlock.
+ * USER_PRESENT alone is unreliable on some OEMs (incl. Motorola); we also poll keyguard state.
  */
 class UnlockWatchService : Service() {
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var keyguardListenerRegistered = false
+    private var wasLocked = true
+    private var promptedForCurrentUnlock = false
+
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            if (!AppPrefs(this@UnlockWatchService).awaitingResumeAfterLock) {
+                stopSelf()
+                return
+            }
+            checkUnlockTransition(reason = "poll")
+            mainHandler.postDelayed(this, POLL_INTERVAL_MS)
+        }
+    }
+
+    private val keyguardListener = KeyguardManager.KeyguardLockedStateListener {
+        mainHandler.post { checkUnlockTransition(reason = "keyguard_listener") }
+    }
+
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        val notification = buildNotification()
+        wasLocked = isKeyguardLocked()
+        promptedForCurrentUnlock = false
+        promoteForeground(waiting = true)
+        UnlockResumeCoordinator.onWatchServiceStarted(this)
+        registerKeyguardListener()
+        mainHandler.post(pollRunnable)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP) {
+            cleanupAndStop()
+            return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_CONTINUE) {
+            if (!isKeyguardLocked()) {
+                UnlockResumeCoordinator.promptBringToFront(this, reason = "notification_action")
+            }
+            return START_STICKY
+        }
+        val prefs = AppPrefs(this)
+        if (!prefs.awaitingResumeAfterLock) {
+            cleanupAndStop()
+            return START_NOT_STICKY
+        }
+        UnlockResumeCoordinator.onWatchServiceStarted(this)
+        checkUnlockTransition(reason = "start_command")
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
+        unregisterKeyguardListener()
+        UnlockResumeCoordinator.onWatchServiceStopping(this)
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun checkUnlockTransition(reason: String) {
+        if (!AppPrefs(this).awaitingResumeAfterLock) return
+        val locked = isKeyguardLocked()
+        val interactive = isInteractive()
+
+        if (locked) {
+            wasLocked = true
+            promptedForCurrentUnlock = false
+            return
+        }
+
+        // Unlocked path: require screen interactive so we don't fire in odd doze states.
+        if (!interactive) return
+
+        val justUnlocked = wasLocked || reason == "keyguard_listener" || reason == "notification_action"
+        wasLocked = false
+        if (!justUnlocked && promptedForCurrentUnlock) return
+        if (promptedForCurrentUnlock && reason == "poll") return
+
+        promptedForCurrentUnlock = true
+        promoteForeground(waiting = false)
+        android.util.Log.i("SpaceLinkUnlock", "unlock detected via $reason — prompting")
+        UnlockResumeCoordinator.promptBringToFront(this, reason = "watch_$reason")
+    }
+
+    private fun promoteForeground(waiting: Boolean) {
+        val notification = buildNotification(waiting)
         try {
             if (Build.VERSION.SDK_INT >= 34) {
                 startForeground(
@@ -32,58 +119,58 @@ class UnlockWatchService : Service() {
                 @Suppress("DEPRECATION")
                 startForeground(NOTIFICATION_ID, notification)
             }
-        } catch (error: Throwable) {
+        } catch (_: Throwable) {
             runCatching {
                 @Suppress("DEPRECATION")
                 startForeground(NOTIFICATION_ID, notification)
-            }.onFailure {
-                AppPrefs(this).recordCrash(error)
-                stopSelf()
             }
         }
-        UnlockResumeCoordinator.onWatchServiceStarted(this)
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            UnlockResumeCoordinator.onWatchServiceStopping(this)
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        val prefs = AppPrefs(this)
-        if (!prefs.awaitingResumeAfterLock) {
-            stopSelf()
-            return START_NOT_STICKY
-        }
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildNotification())
-        UnlockResumeCoordinator.onWatchServiceStarted(this)
-        return START_STICKY
+        manager.notify(NOTIFICATION_ID, notification)
     }
 
-    override fun onDestroy() {
-        UnlockResumeCoordinator.onWatchServiceStopping(this)
-        super.onDestroy()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    private fun buildNotification(): Notification {
-        val pendingIntent = PendingIntent.getActivity(
+    private fun buildNotification(waiting: Boolean): Notification {
+        val continueIntent = UnlockResumeCoordinator.resumePopupIntent(this)
+        val contentPending = PendingIntent.getActivity(
             this,
             NOTIFICATION_ID,
-            UnlockResumeCoordinator.resumePopupIntent(this),
+            continueIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("SpaceLink waiting for unlock")
-            .setContentText("Unlock the phone — then Continue / share screen will appear.")
+        val actionPending = PendingIntent.getService(
+            this,
+            NOTIFICATION_ID + 3,
+            Intent(this, UnlockWatchService::class.java).setAction(ACTION_CONTINUE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val title = if (waiting) "SpaceLink waiting for unlock" else "Continue SpaceLink Focus"
+        val text = if (waiting) {
+            "Unlock the phone — Continue will open after unlock."
+        } else {
+            "Phone unlocked. Tap Continue to allow screen sharing."
+        }
+        val builder = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(contentPending)
             .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .build()
+            .setOnlyAlertOnce(waiting)
+            .setCategory(if (waiting) Notification.CATEGORY_SERVICE else Notification.CATEGORY_ALARM)
+            .addAction(
+                Notification.Action.Builder(
+                    android.R.drawable.ic_media_play,
+                    "Continue",
+                    actionPending
+                ).build()
+            )
+
+        if (!waiting) {
+            builder.setFullScreenIntent(contentPending, true)
+            @Suppress("DEPRECATION")
+            builder.setPriority(Notification.PRIORITY_MAX)
+        }
+        return builder.build()
     }
 
     private fun createChannel() {
@@ -94,16 +181,53 @@ class UnlockWatchService : Service() {
                 "SpaceLink waiting after lock",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Keeps SpaceLink ready to ask for screen capture after unlock"
+                description = "Detects unlock and opens Continue for screen capture"
+                enableVibration(true)
+                setBypassDnd(true)
                 setShowBadge(true)
             }
         )
     }
 
+    private fun registerKeyguardListener() {
+        if (Build.VERSION.SDK_INT < 33 || keyguardListenerRegistered) return
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        runCatching {
+            keyguard.addKeyguardLockedStateListener(mainExecutor, keyguardListener)
+            keyguardListenerRegistered = true
+        }
+    }
+
+    private fun unregisterKeyguardListener() {
+        if (Build.VERSION.SDK_INT < 33 || !keyguardListenerRegistered) return
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        runCatching { keyguard.removeKeyguardLockedStateListener(keyguardListener) }
+        keyguardListenerRegistered = false
+    }
+
+    private fun cleanupAndStop() {
+        mainHandler.removeCallbacksAndMessages(null)
+        unregisterKeyguardListener()
+        UnlockResumeCoordinator.onWatchServiceStopping(this)
+        stopSelf()
+    }
+
+    private fun isKeyguardLocked(): Boolean {
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        return keyguard.isKeyguardLocked
+    }
+
+    private fun isInteractive(): Boolean {
+        val power = getSystemService(POWER_SERVICE) as PowerManager
+        return power.isInteractive
+    }
+
     companion object {
         const val ACTION_STOP = "com.deadlineai.monitor.STOP_UNLOCK_WATCH"
+        const val ACTION_CONTINUE = "com.deadlineai.monitor.CONTINUE_AFTER_UNLOCK"
         private const val CHANNEL_ID = "spacelink_unlock_watch"
         const val NOTIFICATION_ID = 4184
+        private const val POLL_INTERVAL_MS = 800L
 
         fun start(context: Context) {
             val appContext = context.applicationContext

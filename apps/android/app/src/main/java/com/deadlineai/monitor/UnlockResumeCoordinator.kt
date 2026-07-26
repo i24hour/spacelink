@@ -38,7 +38,11 @@ object UnlockResumeCoordinator {
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             val action = intent?.action ?: return
-            if (action != Intent.ACTION_USER_PRESENT && action != Intent.ACTION_SCREEN_ON) return
+            if (
+                action != Intent.ACTION_USER_PRESENT &&
+                action != Intent.ACTION_SCREEN_ON &&
+                action != Intent.ACTION_USER_UNLOCKED
+            ) return
             val appContext = context.applicationContext
             val prefs = AppPrefs(appContext)
             if (!prefs.awaitingResumeAfterLock) {
@@ -49,15 +53,16 @@ object UnlockResumeCoordinator {
 
             when (action) {
                 Intent.ACTION_SCREEN_ON -> {
-                    // Keep waiting notification only. Do NOT open Continue / share-screen
-                    // while the keyguard is still locked.
+                    // Keep waiting notification only while still locked.
                     if (isKeyguardLocked(appContext)) {
                         showWaitingNotification(appContext)
+                    } else {
+                        // Some OEMs skip USER_PRESENT; screen-on can already be unlocked.
+                        promptBringToFront(appContext, reason = "screen_on_unlocked")
                     }
                 }
-                Intent.ACTION_USER_PRESENT -> {
-                    // Phone is unlocked — now it is safe to open Continue + share screen.
-                    promptBringToFront(appContext, reason = "user_present")
+                Intent.ACTION_USER_PRESENT, Intent.ACTION_USER_UNLOCKED -> {
+                    promptBringToFront(appContext, reason = action)
                 }
             }
         }
@@ -148,6 +153,7 @@ object UnlockResumeCoordinator {
         if (receiverRegistered) return
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_USER_UNLOCKED)
             addAction(Intent.ACTION_SCREEN_ON)
             priority = IntentFilter.SYSTEM_HIGH_PRIORITY
         }
@@ -167,19 +173,28 @@ object UnlockResumeCoordinator {
 
     private fun launchResumeActivity(context: Context) {
         val intent = resumePopupIntent(context)
+        // Prefer PendingIntent.send from app context — more likely to clear background
+        // activity-start restrictions than bare startActivity from a service.
         runCatching {
+            val pending = PendingIntent.getActivity(
+                context,
+                NOTIFICATION_ID + 21,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
             if (Build.VERSION.SDK_INT >= 34) {
                 val options = ActivityOptions.makeBasic().apply {
                     setPendingIntentBackgroundActivityStartMode(
                         ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
                     )
                 }
-                context.startActivity(intent, options.toBundle())
+                pending.send(context, 0, null, null, null, null, options.toBundle())
             } else {
-                context.startActivity(intent)
+                pending.send()
             }
         }.onFailure {
-            android.util.Log.w("SpaceLinkUnlock", "startActivity failed: ${it.message}")
+            android.util.Log.w("SpaceLinkUnlock", "pending send failed: ${it.message}")
+            runCatching { context.startActivity(intent) }
         }
     }
 
