@@ -31,6 +31,7 @@ import {
   setUserDailyReminderHour,
 } from "./reminder-engine";
 import { runTelegramAssistant } from "./telegram-assistant";
+import { runTelegramFocusCoach, shouldUseFocusCoach } from "./telegram-focus-coach";
 import {
   getLastDeadlineList,
   refreshTrackedLinksListMessage,
@@ -723,11 +724,19 @@ export async function handleTelegramMessage(chatId: string, text: string) {
     return;
   }
 
-  // Natural language — LLM + database tools (set deadline, delete, refresh, etc.)
+  // Natural language — focus coach (when monitoring) or deadline tools assistant
   if (linkedUser) {
     if (await blockUntilTimezoneConfigured(chatId, linkedUser)) return;
 
     try {
+      if (await shouldUseFocusCoach(linkedUser.id, raw)) {
+        const focusReply = await runTelegramFocusCoach(linkedUser, raw);
+        if (focusReply?.text) {
+          await sendTelegramRaw(chatId, focusReply.text, "HTML");
+          return;
+        }
+      }
+
       const reply = await runTelegramAssistant(linkedUser, raw);
       if (reply?.text) {
         await sendTelegramRaw(chatId, reply.text, "HTML");
