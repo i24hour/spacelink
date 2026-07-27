@@ -21,7 +21,7 @@ import android.widget.Toast
 
 /**
  * Continue UI shown only after the phone is unlocked.
- * Never launches the Android share-screen dialog on the lock screen.
+ * Cancel / Not now fully stops monitoring (no more unlock prompts).
  */
 class ResumeCaptureActivity : Activity() {
     private lateinit var prefs: AppPrefs
@@ -30,6 +30,7 @@ class ResumeCaptureActivity : Activity() {
     private lateinit var notNowButton: Button
     private var promptInFlight = false
     private var captureScheduled = false
+    private var userDeclined = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +45,6 @@ class ResumeCaptureActivity : Activity() {
         }
 
         if (isKeyguardLocked()) {
-            // If we somehow opened while locked, wait — do not start share-screen yet.
             statusText.text = "Unlock your phone first. Screen sharing will start only after unlock."
             continueButton.isEnabled = false
             return
@@ -56,7 +56,8 @@ class ResumeCaptureActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (!::prefs.isInitialized || !::statusText.isInitialized) return
-        if (!prefs.awaitingResumeAfterLock || promptInFlight) return
+        if (userDeclined || promptInFlight) return
+        if (!prefs.awaitingResumeAfterLock) return
         if (isKeyguardLocked()) {
             statusText.text = "Unlock your phone first. Screen sharing will start only after unlock."
             continueButton.isEnabled = false
@@ -72,13 +73,12 @@ class ResumeCaptureActivity : Activity() {
     }
 
     private fun scheduleCaptureAfterUnlock() {
-        if (captureScheduled || promptInFlight || isKeyguardLocked()) return
+        if (userDeclined || captureScheduled || promptInFlight || isKeyguardLocked()) return
         captureScheduled = true
         statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
-        // Small delay so the launcher/keyguard finish settling before the system dialog.
         mainHandler.postDelayed({
             captureScheduled = false
-            if (!isKeyguardLocked()) {
+            if (!userDeclined && !isKeyguardLocked() && prefs.awaitingResumeAfterLock) {
                 requestScreenCapture()
             }
         }, 450L)
@@ -102,7 +102,7 @@ class ResumeCaptureActivity : Activity() {
             setPadding(0, 0, 0, 12)
         })
         statusText = TextView(this).apply {
-            text = "After unlock, tap Continue and Allow screen sharing."
+            text = "After unlock, tap Continue and Allow screen sharing. Cancel / Not now stops monitoring."
             textSize = 15f
             setTextColor(0xFF334155.toInt())
         }
@@ -114,7 +114,7 @@ class ResumeCaptureActivity : Activity() {
         }
         notNowButton = Button(this).apply {
             text = "Not now"
-            setOnClickListener { finish() }
+            setOnClickListener { declineAndStop("Monitoring stopped. You tapped Not now.") }
         }
         card.addView(continueButton, buttonParams())
         card.addView(notNowButton, buttonParams())
@@ -142,7 +142,7 @@ class ResumeCaptureActivity : Activity() {
     }
 
     private fun requestScreenCapture() {
-        if (promptInFlight) return
+        if (userDeclined || promptInFlight) return
         if (isKeyguardLocked()) {
             statusText.text = "Unlock your phone first. Screen sharing will start only after unlock."
             continueButton.isEnabled = false
@@ -181,9 +181,8 @@ class ResumeCaptureActivity : Activity() {
         promptInFlight = false
         continueButton.isEnabled = true
         if (resultCode != RESULT_OK || data == null) {
-            UnlockResumeCoordinator.markAwaitingResume(this)
-            statusText.text = "Permission denied. Tap Continue when ready, or Not now."
-            Toast.makeText(this, "Screen capture permission was not granted", Toast.LENGTH_LONG).show()
+            // User tapped Cancel on the system share-screen dialog → stop monitoring.
+            declineAndStop("Monitoring stopped. You cancelled screen sharing.")
             return
         }
 
@@ -222,6 +221,17 @@ class ResumeCaptureActivity : Activity() {
             prefs.monitoringActive = false
             statusText.text = error.message ?: "Could not restart screen capture"
         }
+    }
+
+    private fun declineAndStop(message: String) {
+        if (userDeclined) return
+        userDeclined = true
+        mainHandler.removeCallbacksAndMessages(null)
+        captureScheduled = false
+        promptInFlight = false
+        UnlockResumeCoordinator.declineAndStopMonitoring(this)
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        finish()
     }
 
     private fun isKeyguardLocked(): Boolean {

@@ -93,6 +93,31 @@ object UnlockResumeCoordinator {
         UnlockWatchService.stop(appContext)
     }
 
+    /**
+     * User tapped Not now / Cancel on share-screen. Fully stop monitoring so we do not
+     * keep prompting after unlock.
+     */
+    fun declineAndStopMonitoring(context: Context) {
+        val appContext = context.applicationContext
+        val prefs = AppPrefs(appContext)
+        prefs.userRequestedStop = true
+        prefs.monitoringActive = false
+        prefs.monitoringError = "Monitoring stopped. You chose not to continue screen sharing."
+        clearAwaitingResume(appContext)
+        runCatching {
+            appContext.startService(
+                Intent(appContext, ScreenCaptureService::class.java)
+                    .setAction(ScreenCaptureService.ACTION_CANCEL_AND_STOP)
+            )
+        }
+        val token = prefs.mobileToken
+        if (!token.isNullOrBlank()) {
+            Thread {
+                runCatching { ApiClient().stop(token) }
+            }.start()
+        }
+    }
+
     fun ensureRegisteredIfNeeded(context: Context) {
         if (AppPrefs(context.applicationContext).awaitingResumeAfterLock) {
             register(context.applicationContext)

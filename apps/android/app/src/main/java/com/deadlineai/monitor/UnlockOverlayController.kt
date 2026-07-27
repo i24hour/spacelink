@@ -110,7 +110,10 @@ object UnlockOverlayController {
         })
         card.addView(Button(context).apply {
             text = "Not now"
-            setOnClickListener { dismiss(context) }
+            setOnClickListener {
+                dismiss(context)
+                UnlockResumeCoordinator.declineAndStopMonitoring(context)
+            }
         })
         val wrap = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
