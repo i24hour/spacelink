@@ -1,6 +1,6 @@
 import type { SavedLink, User } from "@deadlineai/db";
 import { prisma } from "../lib/prisma";
-import { litellm, extractWithLLM } from "../lib/llm";
+import { litellm, extractWithLLM, resolveLlmModel } from "../lib/llm";
 import { extractUrlDataWithFallback, processExtractionFromUrl, updateLinkFromExtraction } from "./extraction-url";
 import {
   formatCountdownHuman,
@@ -297,7 +297,7 @@ export async function runTelegramAssistant(
   user: User,
   message: string
 ): Promise<TelegramAssistantReply | null> {
-  const model = process.env.LITELLM_TOOL_MODEL || process.env.LITELLM_MODEL || "gpt-4o-mini";
+  const model = resolveLlmModel("tools");
   const recentLinks = await prisma.savedLink.findMany({
     where: { userId: user.id, status: { in: ["active", "pending"] } },
     orderBy: [{ extractedDeadline: "asc" }, { updatedAt: "desc" }],
