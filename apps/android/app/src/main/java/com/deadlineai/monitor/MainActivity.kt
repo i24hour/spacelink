@@ -19,6 +19,9 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -417,12 +420,8 @@ class MainActivity : Activity() {
                     null
                 }
                 val sessionStatus = session?.optString("status").orEmpty()
-                val lastCheck = session?.optString("lastCheckAt").orEmpty()
-                    .replace("T", " ")
-                    .removeSuffix(".000Z")
-                val lastUpload = prefs.lastUploadAt.orEmpty()
-                    .replace("T", " ")
-                    .removeSuffix(".000Z")
+                val lastCheck = formatLocalTimestamp(session?.optString("lastCheckAt").orEmpty())
+                val lastUpload = formatLocalTimestamp(prefs.lastUploadAt.orEmpty())
                 val lastKnownCheck = lastCheck.ifBlank { lastUpload }
                 val lastError = prefs.monitoringError
                 val lastCrash = prefs.lastCrash
@@ -482,6 +481,21 @@ class MainActivity : Activity() {
     private fun isKeyguardLocked(): Boolean {
         val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
         return keyguard.isKeyguardLocked
+    }
+
+    /** API sends UTC (…Z); show phone local time (IST on your device). */
+    private fun formatLocalTimestamp(raw: String): String {
+        if (raw.isBlank()) return ""
+        return try {
+            val instant = Instant.parse(raw.trim())
+            DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm:ss a")
+                .withZone(ZoneId.systemDefault())
+                .format(instant)
+        } catch (_: Exception) {
+            raw.replace("T", " ")
+                .removeSuffix("Z")
+                .substringBefore(".")
+        }
     }
 
     private fun updateControls() {
