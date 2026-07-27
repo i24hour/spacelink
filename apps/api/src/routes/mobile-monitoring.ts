@@ -6,6 +6,12 @@ import { hashMobileToken, mobileAuth, MobileAuthRequest } from "../lib/mobile-au
 import { prisma } from "../lib/prisma";
 import { universalAuth, AuthRequest } from "../lib/universal-auth";
 import { sendTelegramRaw } from "../services/notifications/telegram";
+import {
+  buildFocusBehaviorContext,
+  fallbackIntervention,
+  telegramHeadlineForLevel,
+  type FocusCheckHistoryItem,
+} from "../services/focus-context";
 import { analyzeScreenImage } from "../services/screen-analysis";
 
 const router = Router();
@@ -276,19 +282,59 @@ router.post(
       const recent = await prisma.screenCheck.findMany({
         where: { sessionId: session.id },
         orderBy: { capturedAt: "desc" },
-        take: 3,
-        select: { classification: true, observedActivity: true },
+        take: 12,
+        select: {
+          classification: true,
+          observedActivity: true,
+          suggestion: true,
+          capturedAt: true,
+          telegramSentAt: true,
+        },
       });
-      const recentContext = recent
-        .map((item) => `${item.classification}: ${item.observedActivity || "no details"}`)
-        .join("; ");
+      const history: FocusCheckHistoryItem[] = recent.map(
+        (item: {
+          classification: string;
+          observedActivity: string | null;
+          suggestion: string | null;
+          capturedAt: Date;
+          telegramSentAt: Date | null;
+        }): FocusCheckHistoryItem => ({
+          classification: item.classification,
+          observedActivity: item.observedActivity,
+          suggestion: item.suggestion,
+          capturedAt: item.capturedAt,
+          telegramSentAt: item.telegramSentAt,
+        })
+      );
+      // Assume current may be off_track so the coach prompt gets the right escalation ladder.
+      const behaviorContext = buildFocusBehaviorContext({
+        historyNewestFirst: history,
+        intervalMins: session.intervalMins,
+        now: safeCapturedAt,
+        assumeCurrentOffTrack: true,
+      });
       const mimeType = String(req.headers["content-type"] || "image/jpeg").split(";")[0];
       const analysis = await analyzeScreenImage(
         image.toString("base64"),
         mimeType,
         session.goal,
-        recentContext
+        behaviorContext
       );
+
+      let suggestion = analysis.suggestion;
+      if (
+        analysis.classification === "off_track" &&
+        !analysis.sensitiveContent &&
+        !suggestion
+      ) {
+        suggestion = fallbackIntervention({
+          goal: session.goal,
+          level: analysis.escalationLevel,
+          projectedStreak: behaviorContext.projectedOffTrackStreak,
+          projectedMinutes: behaviorContext.projectedMinutesOffTrack,
+          nudgesIgnored: behaviorContext.nudgesIgnored,
+        });
+      }
 
       const check = await prisma.screenCheck.create({
         data: {
@@ -299,7 +345,7 @@ router.post(
           confidence: analysis.confidence,
           observedActivity: analysis.observedActivity,
           reason: analysis.reason,
-          suggestion: analysis.suggestion,
+          suggestion,
           sensitiveContent: analysis.sensitiveContent,
         },
       });
@@ -311,10 +357,23 @@ router.post(
       const user = await prisma.user.findUnique({ where: { id: req.userId as string } });
       let telegramSent = false;
       if (user?.telegramId && analysis.classification === "off_track" && !analysis.sensitiveContent) {
-        const intervention = analysis.suggestion
-          ? escapeTelegramHtml(analysis.suggestion)
-          : "You are drifting away from your goal. Close the distraction and return to the work you said matters.";
-        const message = `⚠️ <b>Focus check</b>\n\n${intervention}`;
+        const level = analysis.escalationLevel;
+        const headline = telegramHeadlineForLevel(level);
+        const factSuffix =
+          level >= 1
+            ? `\n\n<i>(check #${behaviorContext.projectedOffTrackStreak} · ~${behaviorContext.projectedMinutesOffTrack} min)</i>`
+            : "";
+        const intervention = escapeTelegramHtml(
+          suggestion ||
+            fallbackIntervention({
+              goal: session.goal,
+              level,
+              projectedStreak: behaviorContext.projectedOffTrackStreak,
+              projectedMinutes: behaviorContext.projectedMinutesOffTrack,
+              nudgesIgnored: behaviorContext.nudgesIgnored,
+            })
+        );
+        const message = `⚠️ <b>${escapeTelegramHtml(headline)}</b>\n\n${intervention}${factSuffix}`;
         const delivered = await sendTelegramRaw(user.telegramId, message, "HTML");
         telegramSent = delivered.delivered;
         if (telegramSent) {
@@ -330,8 +389,9 @@ router.post(
           confidence: analysis.confidence,
           observedActivity: analysis.observedActivity,
           reason: analysis.reason,
-          suggestion: analysis.suggestion,
+          suggestion,
           sensitiveContent: analysis.sensitiveContent,
+          escalationLevel: analysis.escalationLevel,
           telegramSent,
         },
       });
