@@ -302,7 +302,15 @@ class MainActivity : Activity() {
             val result = api.status(token)
             runOnUiThread {
                 if (!result.ok) {
-                    statusText.text = "Paired locally, but the API status could not be checked."
+                    // Don't leave Start stuck disabled from a prior "active" local state when API is down.
+                    if (!prefs.monitoringActive) {
+                        currentSessionStatus = ""
+                    }
+                    applySessionControls(currentSessionStatus)
+                    val detail = result.error?.takeIf { it.isNotBlank() } ?: "network/API error"
+                    statusText.text =
+                        "Paired locally, but the API is unreachable ($detail). " +
+                            "Share screen / Start needs a live API. Fix hosting, then reopen the app."
                     return@runOnUiThread
                 }
                 val session = try {

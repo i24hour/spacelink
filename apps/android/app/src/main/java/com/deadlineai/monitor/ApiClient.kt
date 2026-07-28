@@ -115,10 +115,18 @@ class ApiClient {
     }
 
     private fun parseError(body: String, status: Int): String {
+        val lower = body.lowercase()
+        if (status == 503 || lower.contains("service suspended") || lower.contains("suspended")) {
+            return "API is suspended or unavailable (HTTP $status). Check Render billing / free-tier limits."
+        }
         return try {
             JSONObject(body).optString("error").ifBlank { "Request failed ($status)" }
         } catch (_: Exception) {
-            "Request failed ($status)"
+            if (body.contains("Service Suspended", ignoreCase = true)) {
+                "API is suspended or unavailable (HTTP $status). Check Render billing / free-tier limits."
+            } else {
+                "Request failed ($status)"
+            }
         }
     }
 }
