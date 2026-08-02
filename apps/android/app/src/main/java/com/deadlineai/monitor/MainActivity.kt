@@ -2,11 +2,13 @@ package com.deadlineai.monitor
 
 import android.Manifest
 import android.app.Activity
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionConfig
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
@@ -17,6 +19,9 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
@@ -34,6 +39,9 @@ class MainActivity : Activity() {
     private var pendingGoal = ""
     private var isPaused = false
     private var currentSessionStatus = ""
+    private var capturePromptInFlight = false
+    private var suppressAutoResumeUntilElapsed = 0L
+    private var pendingStartAfterOverlayPermission = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -45,6 +53,13 @@ class MainActivity : Activity() {
         prefs.lastCrash?.let {
             statusText.text = "Previous app crash: $it"
         }
+        maybeAutoResumeCapture(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        maybeAutoResumeCapture(intent)
     }
 
     override fun onResume() {
@@ -52,6 +67,7 @@ class MainActivity : Activity() {
         if (::statusText.isInitialized && prefs.mobileToken != null) {
             refreshMonitoringStatus()
         }
+        maybeAutoResumeCapture(intent)
     }
 
     private fun buildView(): View {
@@ -140,12 +156,29 @@ class MainActivity : Activity() {
         content.addView(startButton, buttonParams())
         content.addView(pauseButton, buttonParams())
         content.addView(stopButton, buttonParams())
+        content.addView(Button(this).apply {
+            text = "Allow display over other apps"
+            setOnClickListener { openOverlayPermissionHelp() }
+        }, buttonParams())
+        content.addView(Button(this).apply {
+            text = "Allow full-screen continue alerts"
+            setOnClickListener {
+                statusText.text =
+                    "Enable full-screen notifications for SpaceLink so Continue opens on screen after lock (no need to pull notification shade)."
+                UnlockResumeCoordinator.openFullScreenIntentSettings(this@MainActivity)
+            }
+        }, buttonParams())
 
         statusText = label("Not paired", 14f)
         statusText.setPadding(0, 20, 0, 0)
         content.addView(statusText)
         content.addView(spacer(16))
-        content.addView(label("Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android will show a visible screen-capture notification while monitoring is active.", 13f))
+        content.addView(
+            label(
+                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked. Sideloaded APKs often block Display over other apps until you enable Allow restricted settings in App info (⋮ menu).",
+                13f
+            )
+        )
 
         root.addView(scroll, LinearLayout.LayoutParams(-1, -1))
         return root
@@ -177,9 +210,45 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun requestScreenCapture() {
+    private fun maybeAutoResumeCapture(intent: Intent?) {
+        if (!::prefs.isInitialized || !::statusText.isInitialized) return
+        if (capturePromptInFlight || prefs.monitoringActive) return
+        val requested = intent?.getBooleanExtra(
+            UnlockResumeCoordinator.EXTRA_AUTO_RESUME_CAPTURE,
+            false
+        ) == true
+        if (requested) {
+            intent?.removeExtra(UnlockResumeCoordinator.EXTRA_AUTO_RESUME_CAPTURE)
+        }
+        if (!requested && !prefs.awaitingResumeAfterLock) return
+        if (!requested && SystemClock.elapsedRealtime() < suppressAutoResumeUntilElapsed) {
+            statusText.text =
+                "Screen was locked. Tap Continue monitoring and allow screen capture to resume."
+            return
+        }
+        if (isKeyguardLocked()) {
+            statusText.text =
+                "Screen was locked. Unlock your phone — SpaceLink will ask to continue monitoring."
+            return
+        }
+        if (prefs.mobileToken == null) return
+        val goal = goalInput.text.toString().trim().ifBlank { prefs.goal.trim() }
+        if (goal.length < 3) {
+            statusText.text = "Saved goal missing. Enter a goal, then tap Start monitoring."
+            return
+        }
+        if (::goalInput.isInitialized && goalInput.text.toString().trim().isEmpty()) {
+            goalInput.setText(prefs.goal)
+        }
+        statusText.text = "Phone unlocked. Allow screen capture to continue monitoring..."
+        // Already inside the app; don't block capture on overlay settings here.
+        requestScreenCapture(autoResume = true, requireOverlay = false)
+    }
+
+    private fun requestScreenCapture(autoResume: Boolean = false, requireOverlay: Boolean = !autoResume) {
+        if (capturePromptInFlight) return
         val token = prefs.mobileToken
-        val goal = goalInput.text.toString().trim()
+        val goal = goalInput.text.toString().trim().ifBlank { prefs.goal.trim() }
         if (token == null) {
             toast("Pair this phone first")
             return
@@ -188,13 +257,26 @@ class MainActivity : Activity() {
             toast("Enter a goal first")
             return
         }
+        // Overlay helps unlock popup, but sideloaded APKs often need "Allow restricted settings"
+        // first. Never block Start monitoring on overlay — fall back to notification resume.
+        if (requireOverlay && !UnlockOverlayController.canDrawOverlays(this)) {
+            statusText.text =
+                "Tip: unlock popup needs Display over other apps. If Android says App was denied access, open App info → ⋮ → Allow restricted settings, then enable the toggle. Continuing with screen capture now..."
+            toast("You can enable overlay later for unlock popup")
+        }
         pendingGoal = goal
+        prefs.goal = goal
         prefs.intervalMinutes = selectedIntervalMinutes()
         try {
             val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as? MediaProjectionManager
                 ?: throw IllegalStateException("Android screen-capture service is unavailable")
-            statusText.text = "Waiting for Android screen-capture permission..."
+            statusText.text = if (autoResume) {
+                "Phone unlocked. Waiting for Android screen-capture permission..."
+            } else {
+                "Waiting for Android screen-capture permission..."
+            }
             startButton.isEnabled = false
+            capturePromptInFlight = true
             val captureIntent = if (android.os.Build.VERSION.SDK_INT >= 34) {
                 manager.createScreenCaptureIntent(
                     MediaProjectionConfig.createConfigForDefaultDisplay()
@@ -204,6 +286,7 @@ class MainActivity : Activity() {
             }
             startActivityForResult(captureIntent, REQUEST_CAPTURE)
         } catch (error: Exception) {
+            capturePromptInFlight = false
             updateControls()
             statusText.text = "Android could not open the screen-capture permission dialog."
             toast(error.message ?: "Could not request screen capture")
@@ -214,9 +297,17 @@ class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_CAPTURE) return
+        capturePromptInFlight = false
         if (resultCode != RESULT_OK || data == null) {
             updateControls()
-            statusText.text = "Screen-capture permission was denied. Monitoring did not start."
+            if (prefs.awaitingResumeAfterLock || pendingGoal.isNotBlank()) {
+                UnlockResumeCoordinator.markAwaitingResume(this)
+                suppressAutoResumeUntilElapsed = SystemClock.elapsedRealtime() + 60_000L
+                statusText.text =
+                    "Screen-capture permission was denied. Tap Continue monitoring to try again."
+            } else {
+                statusText.text = "Screen-capture permission was denied. Monitoring did not start."
+            }
             toast("Screen capture permission was not granted")
             return
         }
@@ -228,17 +319,24 @@ class MainActivity : Activity() {
         }
         prefs.goal = pendingGoal
         val intervalMinutes = prefs.intervalMinutes
+        val reattach = prefs.awaitingResumeAfterLock
         ProjectionPermissionStore.put(resultCode, data)
         val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
             putExtra(ScreenCaptureService.EXTRA_TOKEN, mobileToken)
             putExtra(ScreenCaptureService.EXTRA_GOAL, pendingGoal)
             putExtra(ScreenCaptureService.EXTRA_INTERVAL_MINUTES, intervalMinutes)
+            // RESULT_OK is -1; pass explicitly so the service never treats success as "missing".
+            putExtra(ScreenCaptureService.EXTRA_RESULT_CODE, resultCode)
+            putExtra(ScreenCaptureService.EXTRA_RESULT_DATA, data)
+            putExtra(ScreenCaptureService.EXTRA_REATTACH_SESSION, reattach)
         }
         try {
+            prefs.userRequestedStop = false
             prefs.monitoringError = null
             prefs.lastCrash = null
             androidxStartForegroundService(serviceIntent)
             prefs.monitoringActive = true
+            UnlockResumeCoordinator.clearAwaitingResume(this)
         } catch (error: Exception) {
             ProjectionPermissionStore.clear()
             prefs.monitoringActive = false
@@ -253,17 +351,28 @@ class MainActivity : Activity() {
         isPaused = false
         pauseButton.text = "Pause monitoring"
         applySessionControls("active")
-        statusText.text = "Screen permission granted. Starting monitoring and the first check..."
+        statusText.text = if (reattach) {
+            "Screen permission granted again. Continuing monitoring..."
+        } else {
+            "Screen permission granted. Starting monitoring and the first check..."
+        }
         statusText.postDelayed({ refreshMonitoringStatus() }, 2_000L)
     }
 
     private fun stopMonitoring() {
         val token = prefs.mobileToken ?: return
+        prefs.userRequestedStop = true
+        UnlockResumeCoordinator.clearAwaitingResume(this)
+        startService(
+            Intent(this, ScreenCaptureService::class.java)
+                .setAction(ScreenCaptureService.ACTION_CANCEL_AND_STOP)
+        )
         io.execute {
             val result = api.stop(token)
             runOnUiThread {
                 stopService(Intent(this, ScreenCaptureService::class.java))
                 prefs.monitoringActive = false
+                prefs.awaitingResumeAfterLock = false
                 isPaused = false
                 pauseButton.text = "Pause monitoring"
                 statusText.text = if (result.ok) "Monitoring stopped." else result.error ?: "Stop failed"
@@ -311,28 +420,26 @@ class MainActivity : Activity() {
                     null
                 }
                 val sessionStatus = session?.optString("status").orEmpty()
-                val lastCheck = session?.optString("lastCheckAt").orEmpty()
-                    .replace("T", " ")
-                    .removeSuffix(".000Z")
-                val lastUpload = prefs.lastUploadAt.orEmpty()
-                    .replace("T", " ")
-                    .removeSuffix(".000Z")
+                val lastCheck = formatLocalTimestamp(session?.optString("lastCheckAt").orEmpty())
+                val lastUpload = formatLocalTimestamp(prefs.lastUploadAt.orEmpty())
                 val lastKnownCheck = lastCheck.ifBlank { lastUpload }
                 val lastError = prefs.monitoringError
                 val lastCrash = prefs.lastCrash
                 isPaused = sessionStatus == "paused"
                 pauseButton.text = if (isPaused) "Resume monitoring" else "Pause monitoring"
                 applySessionControls(sessionStatus)
-                statusText.text = when (sessionStatus) {
-                    "active" -> if (prefs.monitoringActive) {
+                statusText.text = when {
+                    prefs.awaitingResumeAfterLock ->
+                        "Screen was locked, so Android stopped capture. Unlock and allow screen sharing to continue."
+                    sessionStatus == "active" && prefs.monitoringActive ->
                         "Monitoring active. Last check: ${lastKnownCheck.ifBlank { "waiting for first check" }}"
-                    } else {
+                    sessionStatus == "active" ->
                         "API session is active, but screen capture is not running." +
                             (lastCrash?.let { " Last crash: $it" }
                                 ?: lastError?.let { " Last error: $it" }
                                 ?: " Tap Start Monitoring again.")
-                    }
-                    "paused" -> "Monitoring paused. Tap Resume monitoring to continue."
+                    sessionStatus == "paused" ->
+                        "Monitoring paused. Tap Resume monitoring to continue."
                     else -> lastCrash?.let { "Monitoring is stopped. Last crash: $it" }
                         ?: lastError?.let { "Monitoring is stopped. Last error: $it" }
                         ?: "Paired. No monitoring session is active."
@@ -355,13 +462,40 @@ class MainActivity : Activity() {
     private fun applySessionControls(sessionStatus: String) {
         currentSessionStatus = sessionStatus
         val paired = prefs.mobileToken != null
-        val sessionExists = sessionStatus == "active" || sessionStatus == "paused"
+        val sessionExists = sessionStatus == "active" ||
+            sessionStatus == "paused" ||
+            prefs.awaitingResumeAfterLock
         val captureServiceRunning = sessionExists && prefs.monitoringActive
         startButton.isEnabled = paired && !captureServiceRunning
+        startButton.text = if (prefs.awaitingResumeAfterLock && !captureServiceRunning) {
+            "Continue monitoring"
+        } else {
+            "Start monitoring"
+        }
         pauseButton.isEnabled = paired && captureServiceRunning
         stopButton.isEnabled = paired && sessionExists
         goalInput.isEnabled = !captureServiceRunning
         intervalSpinner.isEnabled = !captureServiceRunning
+    }
+
+    private fun isKeyguardLocked(): Boolean {
+        val keyguard = getSystemService(KEYGUARD_SERVICE) as KeyguardManager
+        return keyguard.isKeyguardLocked
+    }
+
+    /** API sends UTC (…Z); show phone local time (IST on your device). */
+    private fun formatLocalTimestamp(raw: String): String {
+        if (raw.isBlank()) return ""
+        return try {
+            val instant = Instant.parse(raw.trim())
+            DateTimeFormatter.ofPattern("dd MMM yyyy, hh:mm:ss a")
+                .withZone(ZoneId.systemDefault())
+                .format(instant)
+        } catch (_: Exception) {
+            raw.replace("T", " ")
+                .removeSuffix("Z")
+                .substringBefore(".")
+        }
     }
 
     private fun updateControls() {
@@ -397,6 +531,25 @@ class MainActivity : Activity() {
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
+    }
+
+    private fun openOverlayPermissionHelp() {
+        if (UnlockOverlayController.canDrawOverlays(this)) {
+            statusText.text = "Display over other apps is already allowed."
+            toast("Overlay permission already enabled")
+            return
+        }
+        statusText.text =
+            "If Android says App was denied access: App info → top-right menu → Allow restricted settings → then turn on Display over other apps."
+        toast("App info → menu → Allow restricted settings")
+        // App details first so the restricted-settings menu is easy to find.
+        runCatching {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+            )
         }
     }
 
