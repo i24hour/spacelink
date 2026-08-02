@@ -1,0 +1,11 @@
+SpaceLink Focus 0.2.9 install note (Android 16)
+
+If you already have 0.2.7 (or any older build) installed, Android will show
+"App not installed" because those APKs were signed with a different debug key.
+
+Do this once:
+1. Long-press SpaceLink Focus Monitor -> App info -> Uninstall
+2. Open the 0.2.9 APK and install
+3. Pair the phone again in SpaceLink Settings (pairing token is cleared on uninstall)
+
+After this, future updates signed with the project keystore can install over 0.2.9.

@@ -15,13 +15,25 @@ android {
         // Keep compileSdk current, but target 34 so Android 15/16 mediaProjection FGS
         // checks match the documented grant-then-startForeground contract more reliably.
         targetSdk = 34
-        versionCode = 19
-        versionName = "0.2.8"
+        versionCode = 20
+        versionName = "0.2.9"
 
         buildConfigField("String", "API_BASE_URL", "\"https://deadlineai-api.onrender.com\"")
     }
 
+
+    signingConfigs {
+        create("debugFixed") {
+            storeFile = rootProject.file("keystore/spacelink-debug.jks")
+            storePassword = "spacelink-debug"
+            keyAlias = "spacelink"
+            keyPassword = "spacelink-debug"
+        }
+    }
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("debugFixed")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
