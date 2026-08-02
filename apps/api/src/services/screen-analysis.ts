@@ -50,8 +50,12 @@ Rules:
 - Use sensitive_content if passwords, banking, private messages, health data, or similarly sensitive information is visible.
 - For off_track, write a fresh intervention that:
   - Names the goal
+  - KEEP strong, direct wording — do NOT soften the push or apologize
   - Matches escalation_level (0 firm, 1 mention repeat, 2 mention streak + minutes + prior nudges, 3 hardest allowed push)
   - If projected streak >= 2, mention streak count and approximate minutes distracted
+  - If productive_streak_checks_before_this_slip >= 2 OR productive_minutes_before_this_slip >= 10: briefly CREDIT that clean block (proof they can lock in), then demand they continue it — e.g. they already did ~15–20 clean minutes, don't throw that away
+  - If productive_minutes_yesterday_approx >= 60: optional one short reference to yesterday's focused hours as proof they can still perform — then push hard on the current slip
+  - Credit is fuel for accountability, not praise that excuses the distraction
   - If prior telegram interventions exist, acknowledge they were already sent
   - Must NOT copy or lightly paraphrase the last intervention
   - Tough, direct, psychologically sharp accountability is required at higher levels

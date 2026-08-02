@@ -282,7 +282,7 @@ router.post(
       const recent = await prisma.screenCheck.findMany({
         where: { sessionId: session.id },
         orderBy: { capturedAt: "desc" },
-        take: 12,
+        take: 24,
         select: {
           classification: true,
           observedActivity: true,
@@ -291,24 +291,42 @@ router.post(
           telegramSentAt: true,
         },
       });
-      const history: FocusCheckHistoryItem[] = recent.map(
-        (item: {
-          classification: string;
-          observedActivity: string | null;
-          suggestion: string | null;
-          capturedAt: Date;
-          telegramSentAt: Date | null;
-        }): FocusCheckHistoryItem => ({
-          classification: item.classification,
-          observedActivity: item.observedActivity,
-          suggestion: item.suggestion,
-          capturedAt: item.capturedAt,
-          telegramSentAt: item.telegramSentAt,
-        })
-      );
+      const mapCheck = (item: {
+        classification: string;
+        observedActivity: string | null;
+        suggestion: string | null;
+        capturedAt: Date;
+        telegramSentAt: Date | null;
+      }): FocusCheckHistoryItem => ({
+        classification: item.classification,
+        observedActivity: item.observedActivity,
+        suggestion: item.suggestion,
+        capturedAt: item.capturedAt,
+        telegramSentAt: item.telegramSentAt,
+      });
+      const history: FocusCheckHistoryItem[] = recent.map(mapCheck);
+      const since = new Date(safeCapturedAt.getTime() - 48 * 60 * 60 * 1000);
+      const dayRows = await prisma.screenCheck.findMany({
+        where: {
+          capturedAt: { gte: since },
+          classification: "productive",
+          session: { userId: req.userId as string },
+        },
+        orderBy: { capturedAt: "desc" },
+        take: 200,
+        select: {
+          classification: true,
+          observedActivity: true,
+          suggestion: true,
+          capturedAt: true,
+          telegramSentAt: true,
+        },
+      });
+      const dayHistory: FocusCheckHistoryItem[] = dayRows.map(mapCheck);
       // Assume current may be off_track so the coach prompt gets the right escalation ladder.
       const behaviorContext = buildFocusBehaviorContext({
         historyNewestFirst: history,
+        dayHistoryNewestFirst: dayHistory,
         intervalMins: session.intervalMins,
         now: safeCapturedAt,
         assumeCurrentOffTrack: true,
@@ -321,19 +339,24 @@ router.post(
         behaviorContext
       );
 
+      const fallbackArgs = {
+        goal: session.goal,
+        level: analysis.escalationLevel,
+        projectedStreak: behaviorContext.projectedOffTrackStreak,
+        projectedMinutes: behaviorContext.projectedMinutesOffTrack,
+        nudgesIgnored: behaviorContext.nudgesIgnored,
+        productiveStreakBeforeSlip: behaviorContext.productiveStreakBeforeSlip,
+        productiveMinutesBeforeSlip: behaviorContext.productiveMinutesBeforeSlip,
+        productiveMinutesYesterday: behaviorContext.productiveMinutesYesterday,
+      };
+
       let suggestion = analysis.suggestion;
       if (
         analysis.classification === "off_track" &&
         !analysis.sensitiveContent &&
         !suggestion
       ) {
-        suggestion = fallbackIntervention({
-          goal: session.goal,
-          level: analysis.escalationLevel,
-          projectedStreak: behaviorContext.projectedOffTrackStreak,
-          projectedMinutes: behaviorContext.projectedMinutesOffTrack,
-          nudgesIgnored: behaviorContext.nudgesIgnored,
-        });
+        suggestion = fallbackIntervention(fallbackArgs);
       }
 
       const check = await prisma.screenCheck.create({
@@ -364,14 +387,7 @@ router.post(
             ? `\n\n<i>(check #${behaviorContext.projectedOffTrackStreak} · ~${behaviorContext.projectedMinutesOffTrack} min)</i>`
             : "";
         const intervention = escapeTelegramHtml(
-          suggestion ||
-            fallbackIntervention({
-              goal: session.goal,
-              level,
-              projectedStreak: behaviorContext.projectedOffTrackStreak,
-              projectedMinutes: behaviorContext.projectedMinutesOffTrack,
-              nudgesIgnored: behaviorContext.nudgesIgnored,
-            })
+          suggestion || fallbackIntervention({ ...fallbackArgs, level })
         );
         const message = `⚠️ <b>${escapeTelegramHtml(headline)}</b>\n\n${intervention}${factSuffix}`;
         const delivered = await sendTelegramRaw(user.telegramId, message, "HTML");

@@ -5,6 +5,7 @@ import {
   buildFocusBehaviorContext,
   computeEscalationLevel,
   computeOffTrackStreak,
+  computeProductiveStreakBeforeSlip,
   fallbackIntervention,
   isTooSimilarToLast,
   type FocusCheckHistoryItem,
@@ -97,6 +98,50 @@ function main() {
   assert(empty.projectedOffTrackStreak === 1, "first check projects to 1");
   assert(empty.escalationLevel === 0, "first check L0");
 
+  // Productive block then first slip
+  const afterClean = [
+    check("productive", minsAgo(5), { observedActivity: "Cursor IDE" }),
+    check("productive", minsAgo(10), { observedActivity: "Cursor IDE" }),
+    check("productive", minsAgo(15), { observedActivity: "Cursor IDE" }),
+  ];
+  assert(computeProductiveStreakBeforeSlip(afterClean, 0) === 3, "3 productive before first slip");
+  const slipCtx = buildFocusBehaviorContext({
+    historyNewestFirst: afterClean,
+    intervalMins: 5,
+    now,
+    assumeCurrentOffTrack: true,
+  });
+  assert(slipCtx.productiveStreakBeforeSlip === 3, "context keeps productive streak");
+  assert(slipCtx.productiveMinutesBeforeSlip >= 15, "≈15+ clean minutes");
+  assert(slipCtx.escalationLevel === 0, "first slip still L0 — strong, not soft");
+
+  // Off-track run after productive block
+  const slipAfter = [
+    check("off_track", minsAgo(0)),
+    check("productive", minsAgo(5)),
+    check("productive", minsAgo(10)),
+    check("productive", minsAgo(15)),
+  ];
+  assert(computeProductiveStreakBeforeSlip(slipAfter, 1) === 3, "skip 1 off_track then count productive");
+
+  const dayHistory = [
+    check("productive", minsAgo(60)),
+    check("productive", minsAgo(120)),
+    // yesterday (~30h ago from noon UTC Jul 27 → Jul 26)
+    check("productive", new Date("2026-07-26T10:00:00.000Z")),
+    check("productive", new Date("2026-07-26T11:00:00.000Z")),
+    check("productive", new Date("2026-07-26T12:00:00.000Z")),
+    check("productive", new Date("2026-07-26T13:00:00.000Z")),
+  ];
+  const withDays = buildFocusBehaviorContext({
+    historyNewestFirst: slipAfter,
+    dayHistoryNewestFirst: dayHistory,
+    intervalMins: 60,
+    now,
+    assumeCurrentOffTrack: true,
+  });
+  assert(withDays.productiveMinutesYesterday >= 180, "yesterday productive minutes counted");
+
   const fallback = fallbackIntervention({
     goal: "Finish thesis",
     level: 2,
@@ -106,6 +151,20 @@ function main() {
   });
   assert(fallback.includes("Finish thesis"), "fallback names goal");
   assert(fallback.includes("4"), "fallback mentions streak");
+
+  const credited = fallbackIntervention({
+    goal: "Cursor/Codex",
+    level: 0,
+    projectedStreak: 1,
+    projectedMinutes: 1,
+    nudgesIgnored: 0,
+    productiveStreakBeforeSlip: 3,
+    productiveMinutesBeforeSlip: 15,
+    productiveMinutesYesterday: 240,
+  });
+  assert(/clean minute|solid check|Yesterday/i.test(credited), "fallback credits prior work");
+  assert(/Close this distraction|return to the work/i.test(credited), "fallback keeps strong push");
+  assert(!/sorry|it's okay|no worries/i.test(credited), "no soft apology language");
 
   assert(
     isTooSimilarToLast(
