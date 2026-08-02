@@ -2,7 +2,16 @@
  * Builds psychological / behavioral context for focus-check interventions.
  * Uses prior ScreenCheck rows (no raw screenshots) to escalate accountability
  * while still crediting recent productive streaks so the user knows they can recover.
+ * Escalation can blend execution-legend traits (work rate only) via execution-legends.ts.
  */
+
+import {
+  formatExecutionLegendForPrompt,
+  legendFallbackLine,
+  selectExecutionLegend,
+  type ExecutionLegend,
+  resolveFocusUserAge,
+} from "./execution-legends";
 
 export type FocusCheckHistoryItem = {
   classification: string;
@@ -256,16 +265,33 @@ export function buildFocusBehaviorContext(input: {
   };
 }
 
-export function formatFocusContextForPrompt(
+export function pickLegendForContext(
   goal: string,
   context: FocusBehaviorContext
+): ExecutionLegend {
+  return selectExecutionLegend({
+    projectedStreak: context.projectedOffTrackStreak,
+    goal,
+    lastInterventions: context.lastInterventions,
+  });
+}
+
+export function formatFocusContextForPrompt(
+  goal: string,
+  context: FocusBehaviorContext,
+  opts?: { legend?: ExecutionLegend; userAge?: number }
 ): string {
   const interventions =
     context.lastInterventions.length === 0
       ? "- (none yet)"
       : context.lastInterventions.map((text, i) => `${i + 1}) ${text}`).join("\n");
 
+  const userAge = opts?.userAge ?? resolveFocusUserAge();
+  const legend = opts?.legend ?? pickLegendForContext(goal, context);
+  const legendBlock = formatExecutionLegendForPrompt(legend, userAge, goal);
+
   return `Goal: ${goal}
+User age (pressure frame): ${userAge}
 Behavior context (use this to personalize and escalate — keep wording strong):
 - off_track_streak_so_far: ${context.offTrackStreak}
 - projected_off_track_streak_if_still_distracted: ${context.projectedOffTrackStreak}
@@ -280,7 +306,9 @@ Behavior context (use this to personalize and escalate — keep wording strong):
 - check_interval_minutes: ${context.intervalMins}
 - recent_pattern: ${context.recentPattern}
 - last_telegram_interventions:
-${interventions}`;
+${interventions}
+
+${legendBlock}`;
 }
 
 export function telegramHeadlineForLevel(level: 0 | 1 | 2 | 3): string {
@@ -324,6 +352,9 @@ export function fallbackIntervention(input: {
   productiveStreakBeforeSlip?: number;
   productiveMinutesBeforeSlip?: number;
   productiveMinutesYesterday?: number;
+  legend?: ExecutionLegend;
+  userAge?: number;
+  lastInterventions?: string[];
 }): string {
   const goal = input.goal.trim() || "your goal";
   const streak = Math.max(1, input.projectedStreak);
@@ -333,6 +364,14 @@ export function fallbackIntervention(input: {
     productiveMinutesBeforeSlip: input.productiveMinutesBeforeSlip ?? 0,
     productiveMinutesYesterday: input.productiveMinutesYesterday ?? 0,
   });
+  const age = input.userAge ?? resolveFocusUserAge();
+  const legend =
+    input.legend ??
+    selectExecutionLegend({
+      projectedStreak: streak,
+      goal,
+      lastInterventions: input.lastInterventions,
+    });
 
   let body = "";
   switch (input.level) {
@@ -348,6 +387,17 @@ export function fallbackIntervention(input: {
     case 3:
       body = `${streak}th off-track check on "${goal}" — roughly ${mins} minutes gone and ${input.nudgesIgnored} nudges ignored. Stop scrolling. Do the next concrete work step now.`;
       break;
+  }
+
+  // L2+ (and long L1): blend one execution-legend jab — work rate only.
+  if (input.level >= 2 || (input.level >= 1 && streak >= 3)) {
+    const jab = legendFallbackLine({
+      legend,
+      goal,
+      age,
+      projectedStreak: streak,
+    });
+    body = `${jab} ${body}`;
   }
 
   if (!credit) return body;

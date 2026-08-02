@@ -348,6 +348,7 @@ router.post(
         productiveStreakBeforeSlip: behaviorContext.productiveStreakBeforeSlip,
         productiveMinutesBeforeSlip: behaviorContext.productiveMinutesBeforeSlip,
         productiveMinutesYesterday: behaviorContext.productiveMinutesYesterday,
+        lastInterventions: behaviorContext.lastInterventions,
       };
 
       let suggestion = analysis.suggestion;
