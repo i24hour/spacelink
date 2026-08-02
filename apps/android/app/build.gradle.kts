@@ -39,7 +39,7 @@ android {
     }
 
     base {
-        archivesName.set("spacelink-focus-0.1.6")
+        archivesName.set("spacelink-focus-${defaultConfig.versionName}")
     }
 }
 
