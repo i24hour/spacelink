@@ -145,7 +145,7 @@ class MainActivity : Activity() {
         statusText.setPadding(0, 20, 0, 0)
         content.addView(statusText)
         content.addView(spacer(16))
-        content.addView(label("Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android will show a visible screen-capture notification while monitoring is active.", 13f))
+        content.addView(label("Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Screen mirroring is attached only during each check, then detached to reduce battery/heat. Android may still show a screen-capture indicator while the monitoring session is active.", 13f))
 
         root.addView(scroll, LinearLayout.LayoutParams(-1, -1))
         return root
