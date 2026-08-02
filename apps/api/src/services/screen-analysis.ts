@@ -56,16 +56,18 @@ Rules:
   - If productive_streak_checks_before_this_slip >= 2 OR productive_minutes_before_this_slip >= 10: briefly CREDIT that clean block (proof they can lock in), then demand they continue it — e.g. they already did ~15–20 clean minutes, don't throw that away
   - If productive_minutes_yesterday_approx >= 60: optional one short reference to yesterday's focused hours as proof they can still perform — then push hard on the current slip
   - Credit is fuel for accountability, not praise that excuses the distraction
+  - Blend the Execution reference: at escalation_level >= 1, juggle ONE of (name+trait | age milestone vs user_age | without_hard_work counterfactual) into the line — then order them back to the goal. These are work-rate references, NOT heroes/idols. Remap any intense historical figure to LEGAL shipping on the user's goal. Never instruct crime or harm.
+  - At escalation_level 0 you may skip the legend; at 2–3 you should usually include it
   - If prior telegram interventions exist, acknowledge they were already sent
   - Must NOT copy or lightly paraphrase the last intervention
   - Tough, direct, psychologically sharp accountability is required at higher levels
   - Still forbid harassment, threats, slurs, humiliation, or shaming the person's identity — attack the behavior and wasted time only
 - For productive, unclear, or sensitive_content, set suggestion to null.
 - Never reproduce private messages, account numbers, passwords, or personal content.
-- Keep each text field under 240 characters.`,
+- Keep observed_activity/reason under 240 characters; suggestion under 380 characters.`,
     imageBase64,
     mimeType,
-    "You are a strict privacy-conscious accountability coach analyzing a phone screenshot for someone who asked to be pushed hard using their own distraction history. Return valid JSON only."
+    "You are a strict privacy-conscious accountability coach analyzing a phone screenshot for someone who asked to be pushed hard using their own distraction history plus execution-legend work-rate references. Return valid JSON only."
   );
 
   const rawClassification = asText(result?.classification, 40);
@@ -76,7 +78,7 @@ Rules:
     : "unclear";
   const sensitiveContent = Boolean(result?.sensitive_content) || classification === "sensitive_content";
   const rawConfidence = Number(result?.confidence);
-  let suggestion = sensitiveContent ? null : asText(result?.suggestion, 240);
+  let suggestion = sensitiveContent ? null : asText(result?.suggestion, 380);
   if (
     suggestion &&
     classification === "off_track" &&

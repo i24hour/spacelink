@@ -148,9 +148,14 @@ function main() {
     projectedStreak: 4,
     projectedMinutes: 22,
     nudgesIgnored: 2,
+    userAge: 22,
   });
   assert(fallback.includes("Finish thesis"), "fallback names goal");
   assert(fallback.includes("4"), "fallback mentions streak");
+  assert(
+    /Jobs|Musk|Escobar|Eminem|Jordan|MJ/i.test(fallback),
+    "L2 fallback blends an execution legend"
+  );
 
   const credited = fallbackIntervention({
     goal: "Cursor/Codex",
