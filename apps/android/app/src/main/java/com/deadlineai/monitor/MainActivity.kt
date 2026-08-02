@@ -175,7 +175,7 @@ class MainActivity : Activity() {
         content.addView(spacer(16))
         content.addView(
             label(
-                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Android stops screen capture when the phone is locked. Sideloaded APKs often block Display over other apps until you enable Allow restricted settings in App info (⋮ menu).",
+                "Privacy: SpaceLink uses a temporary screenshot for analysis and does not retain the raw image by default. Screen mirroring attaches only during each check, then detaches to reduce battery/heat. Android stops capture when the phone is locked. Sideloaded APKs often block Display over other apps until you enable Allow restricted settings in App info (⋮ menu).",
                 13f
             )
         )
