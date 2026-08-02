@@ -75,7 +75,7 @@ export async function runTelegramFocusCoach(
   const recent = await prisma.screenCheck.findMany({
     where: { sessionId: session.id },
     orderBy: { capturedAt: "desc" },
-    take: 12,
+    take: 24,
     select: {
       classification: true,
       observedActivity: true,
@@ -86,7 +86,32 @@ export async function runTelegramFocusCoach(
     },
   });
 
+  const since = new Date(Date.now() - 48 * 60 * 60 * 1000);
+  const dayRows = await prisma.screenCheck.findMany({
+    where: {
+      capturedAt: { gte: since },
+      classification: "productive",
+      session: { userId: user.id },
+    },
+    orderBy: { capturedAt: "desc" },
+    take: 200,
+    select: {
+      classification: true,
+      observedActivity: true,
+      suggestion: true,
+      capturedAt: true,
+      telegramSentAt: true,
+    },
+  });
+
   const history: FocusCheckHistoryItem[] = recent.map((item) => ({
+    classification: item.classification,
+    observedActivity: item.observedActivity,
+    suggestion: item.suggestion,
+    capturedAt: item.capturedAt,
+    telegramSentAt: item.telegramSentAt,
+  }));
+  const dayHistory: FocusCheckHistoryItem[] = dayRows.map((item) => ({
     classification: item.classification,
     observedActivity: item.observedActivity,
     suggestion: item.suggestion,
@@ -96,6 +121,7 @@ export async function runTelegramFocusCoach(
 
   const behavior = buildFocusBehaviorContext({
     historyNewestFirst: history,
+    dayHistoryNewestFirst: dayHistory,
     intervalMins: session.intervalMins,
     assumeCurrentOffTrack: history[0]?.classification === "off_track",
   });
@@ -110,7 +136,9 @@ Stay in character: tough, direct, English only. You already know their goal and 
 
 Rules:
 - Interpret casual typos and slang from the focus-nudge thread. Examples: "return hn" / "return honestly" / "y return" = pushing back on going back to work. Do NOT invent unrelated meanings (especially not Hacker News for "hn").
-- Use the behavior context (streak, minutes, prior nudges, last seen activity) to answer specifically.
+- Use the behavior context (off-track streak, productive streak before slip, today/yesterday productive minutes, prior nudges) to answer specifically.
+- KEEP strong wording. Do not soften into gentle therapy language.
+- If they had a recent productive streak or solid yesterday hours, briefly credit that as PROOF they can still lock in — then push them to continue that streak / get back now. Credit is not an excuse.
 - Keep replies short (2–5 sentences). No markdown tables. Plain text is fine; light <b> HTML ok.
 - Tough love is required. Still forbid threats, slurs, humiliation, or attacking identity — attack the distraction and wasted time only.
 - If they ask to stop monitoring, tell them to use the Android Focus Monitor app (Pause/Stop), not Telegram commands.
