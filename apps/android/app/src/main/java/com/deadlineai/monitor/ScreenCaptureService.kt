@@ -11,12 +11,14 @@ import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
+import android.os.SystemClock
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import java.nio.ByteBuffer
@@ -25,6 +27,11 @@ import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+/**
+ * Keeps one MediaProjection + VirtualDisplay for the monitoring session (Android 14+ allows
+ * only one createVirtualDisplay per projection), but detaches the ImageReader surface between
+ * checks via [VirtualDisplay.setSurface] so the system is not continuously mirroring frames.
+ */
 class ScreenCaptureService : Service() {
     private val api = ApiClient()
     private val uploadExecutor = Executors.newSingleThreadExecutor()
@@ -96,6 +103,7 @@ class ScreenCaptureService : Service() {
             ACTION_PAUSE -> {
                 capturesEnabled = false
                 captureHandler.removeCallbacks(captureRunnable)
+                detachCaptureSurface()
                 updateNotification(paused = true)
                 return START_NOT_STICKY
             }
@@ -146,7 +154,7 @@ class ScreenCaptureService : Service() {
                 stopSelf()
             }
         }, captureHandler)
-        setupVirtualDisplay()
+        ensureVirtualDisplay()
         prefs.monitoringActive = true
         prefs.monitoringError = null
         prefs.lastCrash = null
@@ -188,7 +196,27 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    private fun setupVirtualDisplay() {
+    /**
+     * Create the VirtualDisplay once with a null surface (no continuous mirroring).
+     * Android 14+ forbids calling createVirtualDisplay again on the same MediaProjection.
+     */
+    private fun ensureVirtualDisplay() {
+        if (virtualDisplay != null) return
+        computeCaptureMetrics()
+        virtualDisplay = mediaProjection?.createVirtualDisplay(
+            "SpaceLink Focus",
+            width,
+            height,
+            density,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            /* surface = */ null,
+            null,
+            captureHandler
+        ) ?: throw IllegalStateException("Could not create virtual display")
+        android.util.Log.i(TAG, "VirtualDisplay created with detached surface (${width}x$height)")
+    }
+
+    private fun computeCaptureMetrics() {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.getRealMetrics(metrics)
@@ -198,25 +226,62 @@ class ScreenCaptureService : Service() {
         width = (screenWidth * captureScale).roundToInt().coerceAtLeast(1)
         height = (screenHeight * captureScale).roundToInt().coerceAtLeast(1)
         density = (metrics.densityDpi * captureScale).roundToInt().coerceAtLeast(1)
-        imageReader = ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, 2)
-        virtualDisplay = mediaProjection?.createVirtualDisplay(
-            "SpaceLink Focus",
-            width,
-            height,
-            density,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            imageReader?.surface,
-            null,
-            captureHandler
-        )
+    }
+
+    private fun attachCaptureSurface() {
+        val display = virtualDisplay
+            ?: throw IllegalStateException("VirtualDisplay is not ready")
+        if (imageReader != null) return
+        computeCaptureMetrics()
+        // Resize if rotation/size changed since session start (same projection session).
+        runCatching { display.resize(width, height, density) }
+        val reader = ImageReader.newInstance(width, height, android.graphics.PixelFormat.RGBA_8888, 2)
+        imageReader = reader
+        display.setSurface(reader.surface)
+        android.util.Log.i(TAG, "Capture surface attached")
+    }
+
+    private fun detachCaptureSurface() {
+        val display = virtualDisplay
+        val reader = imageReader
+        imageReader = null
+        runCatching { display?.setSurface(null) }
+        runCatching { reader?.close() }
+        if (display != null || reader != null) {
+            android.util.Log.i(TAG, "Capture surface detached")
+        }
+    }
+
+    private fun waitForFrame(timeoutMs: Long): Image? {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val image = imageReader?.acquireLatestImage()
+            if (image != null) return image
+            try {
+                Thread.sleep(FRAME_POLL_MS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return null
+            }
+        }
+        return imageReader?.acquireLatestImage()
     }
 
     private fun captureFrame(): Boolean {
         val currentToken = token ?: return false
-        val image = imageReader?.acquireLatestImage() ?: return false
+        if (mediaProjection == null || virtualDisplay == null) return false
+
         var sourceBitmap: Bitmap? = null
         var frameBitmap: Bitmap? = null
+        var image: Image? = null
         try {
+            attachCaptureSurface()
+            image = waitForFrame(FRAME_WAIT_TIMEOUT_MS)
+            if (image == null) {
+                android.util.Log.w(TAG, "No frame available after attaching capture surface")
+                return false
+            }
+
             val plane = image.planes.firstOrNull() ?: return false
             val pixelStride = plane.pixelStride
             val rowStride = plane.rowStride
@@ -269,7 +334,9 @@ class ScreenCaptureService : Service() {
             }
             return false
         } finally {
-            image.close()
+            runCatching { image?.close() }
+            // Always stop continuous mirroring between checks.
+            detachCaptureSurface()
         }
     }
 
@@ -330,9 +397,11 @@ class ScreenCaptureService : Service() {
         if (::prefs.isInitialized) prefs.monitoringActive = false
         capturesEnabled = false
         if (::captureHandler.isInitialized) captureHandler.removeCallbacksAndMessages(null)
+        detachCaptureSurface()
         runCatching { virtualDisplay?.release() }
-        runCatching { imageReader?.close() }
+        virtualDisplay = null
         runCatching { mediaProjection?.stop() }
+        mediaProjection = null
         uploadExecutor.shutdownNow()
         if (::captureThread.isInitialized) captureThread.quitSafely()
         super.onDestroy()
@@ -355,5 +424,7 @@ class ScreenCaptureService : Service() {
         private const val MAX_CAPTURE_LONG_EDGE_PX = 1_600
         private const val DEFAULT_INTERVAL_MINUTES = 60
         private const val DEFAULT_CAPTURE_INTERVAL_MS = DEFAULT_INTERVAL_MINUTES * 60_000L
+        private const val FRAME_WAIT_TIMEOUT_MS = 1_500L
+        private const val FRAME_POLL_MS = 50L
     }
 }
