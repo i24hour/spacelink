@@ -13,6 +13,7 @@ import {
   type FocusCheckHistoryItem,
 } from "../services/focus-context";
 import { analyzeScreenImage } from "../services/screen-analysis";
+import { getFocusScoreSummary } from "../services/focus-score";
 
 const router = Router();
 const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
@@ -97,6 +98,86 @@ router.post("/pair-code", universalAuth, async (req: AuthRequest, res) => {
   } catch (error) {
     console.error("mobile pair-code error:", error);
     return res.status(500).json({ error: "Could not create pairing code" });
+  }
+});
+
+router.get("/companion-status", universalAuth, async (req: AuthRequest, res) => {
+  try {
+    const userId = req.userId as string;
+    const [user, device, session, recentChecks, focus] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { telegramId: true },
+      }),
+      prisma.mobileDevice.findFirst({
+        where: { userId, revokedAt: null },
+        orderBy: { lastSeenAt: "desc" },
+        select: { id: true, name: true, lastSeenAt: true },
+      }),
+      prisma.monitoringSession.findFirst({
+        where: { userId, status: { in: ["active", "paused"] } },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          goal: true,
+          status: true,
+          intervalMins: true,
+          startedAt: true,
+          pausedAt: true,
+          stoppedAt: true,
+          lastCheckAt: true,
+          deviceId: true,
+        },
+      }),
+      prisma.screenCheck.findMany({
+        where: { session: { userId } },
+        orderBy: { capturedAt: "desc" },
+        take: 10,
+        select: {
+          id: true,
+          capturedAt: true,
+          classification: true,
+          confidence: true,
+          observedActivity: true,
+          telegramSentAt: true,
+        },
+      }),
+      getFocusScoreSummary(userId),
+    ]);
+
+    return res.json({
+      focusScore: focus.score,
+      focusBonusPoints: focus.bonusPoints,
+      focusScoreHistory: focus.history,
+      telegramConnected: Boolean(user?.telegramId),
+      device: device
+        ? { id: device.id, name: device.name, lastSeenAt: device.lastSeenAt }
+        : null,
+      session: session
+        ? {
+            id: session.id,
+            goal: session.goal,
+            intervalMinutes: session.intervalMins,
+            status: session.status,
+            startedAt: session.startedAt,
+            pausedAt: session.pausedAt,
+            stoppedAt: session.stoppedAt,
+            lastCheckAt: session.lastCheckAt,
+            deviceId: session.deviceId,
+          }
+        : null,
+      recentChecks: recentChecks.map((check) => ({
+        id: check.id,
+        capturedAt: check.capturedAt,
+        classification: check.classification,
+        confidence: check.confidence,
+        observedActivity: check.observedActivity,
+        telegramSent: Boolean(check.telegramSentAt),
+      })),
+    });
+  } catch (error) {
+    console.error("mobile companion-status error:", error);
+    return res.status(500).json({ error: "Could not load focus status" });
   }
 });
 
